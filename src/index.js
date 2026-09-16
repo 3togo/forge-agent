@@ -93,6 +93,7 @@ function parseArgs(argv) {
     noSponsorNudge: false,
     launchAssets: null,
     testModel: null,
+    acp        : false,
     };
 
     let i = 0;
@@ -116,6 +117,7 @@ function parseArgs(argv) {
       case '--plan':        opts.plan        = true;    break;
       case '--think':       opts.think       = true;    break;
       case '--no-tui':      opts.noTui       = true;    break;
+      case '--acp':         opts.acp         = true;    break;
       case '--compact':     opts.compact     = true;    break;
       case '--no-memory':   opts.noMemory    = true;    break;
       case '--no-cache':    opts.noCache     = true;    break;
@@ -1384,6 +1386,14 @@ async function main() {
       logger.error('Calibration error: ' + e.message);
     }
     await shutdown(0);
+  }
+
+  // ── ACP mode ───────────────────────────────────────────────────────────────
+  if (args.acp) {
+    const AcpServer = require('./acp-server');
+    const acp = new AcpServer(agent);
+    acp.start();
+    return;
   }
 
   // ── Validate we have a task or interactive mode ────────────────────────────

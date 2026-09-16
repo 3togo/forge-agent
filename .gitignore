@@ -43,3 +43,5 @@ desktop.ini
 dist/
 build/
 out/
+
+.forge-permissions.json

@@ -4,6 +4,7 @@
 const BaseAdapter = require('../src/adapters/base-adapter');
 const DeepSeekAdapter = require('../src/adapters/deepseek-adapter');
 const GeminiAdapter = require('../src/adapters/gemini-adapter');
+const DoubaoAdapter = require('../src/adapters/doubao-adapter');
 const { getAdapter, getModelUrl, getModelDisplayName, SUPPORTED_MODELS } = require('../src/adapter-factory');
 
 const mockPage = {
@@ -103,12 +104,14 @@ describe('Model Adapters', () => {
     test('getAdapter returns correct instances', () => {
       expect(getAdapter('deepseek', mockPage, mockConfig)).toBeInstanceOf(DeepSeekAdapter);
       expect(getAdapter('gemini', mockPage, mockConfig)).toBeInstanceOf(GeminiAdapter);
+      expect(getAdapter('doubao', mockPage, mockConfig)).toBeInstanceOf(DoubaoAdapter);
     });
 
     test('handles aliases', () => {
       expect(getAdapter('google', mockPage, mockConfig)).toBeInstanceOf(GeminiAdapter);
       expect(getAdapter('bard', mockPage, mockConfig)).toBeInstanceOf(GeminiAdapter);
       expect(getAdapter('r1', mockPage, mockConfig)).toBeInstanceOf(DeepSeekAdapter);
+      expect(getAdapter('豆包', mockPage, mockConfig)).toBeInstanceOf(DoubaoAdapter);
     });
 
     test('is case insensitive', () => {
@@ -131,19 +134,22 @@ describe('Model Adapters', () => {
     test('getModelUrl returns correct strings', () => {
       expect(getModelUrl('deepseek')).toBe('https://chat.deepseek.com');
       expect(getModelUrl('gemini')).toBe('https://gemini.google.com/app');
+      expect(getModelUrl('doubao')).toBe('https://www.doubao.com/chat');
     });
 
     test('getModelDisplayName returns human strings', () => {
       expect(getModelDisplayName('deepseek')).toBe('DeepSeek');
       expect(getModelDisplayName('gemini')).toBe('Gemini');
+      expect(getModelDisplayName('doubao')).toBe('Doubao (豆包)');
       expect(getModelDisplayName('unknown')).toBe('unknown');
     });
 
     test('SUPPORTED_MODELS is exported and complete', () => {
       expect(SUPPORTED_MODELS).toContain('deepseek');
       expect(SUPPORTED_MODELS).toContain('gemini');
+      expect(SUPPORTED_MODELS).toContain('doubao');
       expect(SUPPORTED_MODELS).not.toContain('chatgpt');
-      expect(SUPPORTED_MODELS.length).toBe(2);
+      expect(SUPPORTED_MODELS.length).toBe(3);
     });
   });
 

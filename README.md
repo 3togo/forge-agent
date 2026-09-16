@@ -2,7 +2,7 @@
 
 **Autonomous AI Coding Agent — No API Key Needed**
 
-Forge Agent drives DeepSeek, ChatGPT, or Gemini through browser
+Forge Agent drives DeepSeek, Gemini, or Doubao (豆包) through browser
 automation to code, test, and ship software — completely free.
 
 [![npm version](https://img.shields.io/npm/v/@omar-azam/forge-agent)](https://www.npmjs.com/package/@omar-azam/forge-agent)
@@ -23,7 +23,7 @@ Forge Agent is free and open source. If it saves you time:
 
 ## Why Forge Agent?
 
-- **Free** — No API key. Uses DeepSeek, ChatGPT, or Gemini's free web UI.
+- **Free** — No API key. Uses DeepSeek, Gemini, or Doubao's free web UI.
 - **Autonomous** — Reads files, writes code, runs tests. Loops until done.
 - **Cross-platform** — Linux, macOS, Windows, and Docker.
 - **50 days built** — 37+ tools, 1300+ tests, full docs, security audited.
@@ -64,12 +64,13 @@ fa "add TypeScript to this project"
 
 | Feature | Description |
 |---|---|
-| 🌐 Browser Automation | Drives DeepSeek, ChatGPT, Gemini — no API key |
+| 🌐 Browser Automation | Drives DeepSeek, Gemini, Doubao — no API key |
 | 🔧 37+ Built-in Tools | File I/O, git, shell, search, tests, packages, diff, env, processes |
 | 💾 Persistent Memory | Remembers project tech stack and past tasks |
 | 🎭 Agent Profiles | default, backend, frontend, data-science, devops |
 | 📋 Task Templates | 10 built-in templates — add TypeScript, Jest, Docker in one command |
 | 🔄 Session Resume | Continue tasks that stopped halfway |
+| 📡 ACP Protocol | Stdio JSON-RPC for GUI integration (AionUi, etc.) |
 | 👁 Watch Mode | Auto re-run on file changes |
 | 🔌 Custom Plugins | Drop a .js file to add any tool |
 | 🔒 Security Sandbox | Blocks SSH keys, credentials, path traversal |
@@ -184,9 +185,11 @@ forge-agent --new-plugin my_tool # generate a stub
 forge-agent [OPTIONS] [TASK]
 
 Core:      --interactive -i  --dir  --model  --profile  --plan  --think
+Models:    --model=deepseek  --model=gemini  --model=doubao
 Sessions:  --resume  --rerun  --history  --no-memory
 Templates: --template  --list-templates  --save-template
 Output:    --format  --output  --no-tui  --compact
+ACP:       --acp  (stdio JSON-RPC for GUI integration)
 Watch:     --watch  --watch-pattern  --watch-debounce
 Performance: --max-iterations  --timeout  --no-timeout
 Plugins:   --list-plugins  --new-plugin
@@ -214,6 +217,29 @@ Full reference: `forge-agent --help` or [docs/cli-reference.html](docs/cli-refer
 ```
 
 Run `forge-agent --setup` for guided configuration.
+
+### Supported Models
+
+| Model | URL | Notes |
+|---|---|---|
+| `deepseek` | chat.deepseek.com | Default, best tool-call reliability |
+| `gemini` | gemini.google.com/app | Google's free tier |
+| `doubao` | www.doubao.com/chat | ByteDance's 豆包, Chinese UI |
+
+```bash
+forge-agent --model=deepseek "task"   # default
+forge-agent --model=gemini "task"
+forge-agent --model=doubao "task"     # or --model=豆包
+```
+
+### ACP Protocol (GUI Integration)
+
+Forge Agent supports the Agent Communication Protocol (ACP) via stdio JSON-RPC,
+enabling integration with GUI clients like AionUi:
+
+```bash
+forge-agent --acp    # start in ACP server mode
+```
 
 ---
 

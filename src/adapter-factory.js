@@ -1,7 +1,7 @@
 // src/adapter-factory.js — Factory for model adapters
 'use strict';
 
-const SUPPORTED_MODELS = ['deepseek', 'gemini'];
+const SUPPORTED_MODELS = ['deepseek', 'gemini', 'doubao'];
 
 /**
  * Get an adapter instance for the specified model.
@@ -39,6 +39,11 @@ function getAdapter(modelName, page, config) {
       const GeminiAdapter = require('./adapters/gemini-adapter');
       return new GeminiAdapter(page, config);
     }
+    case 'doubao':
+    case '豆包': {
+      const DoubaoAdapter = require('./adapters/doubao-adapter');
+      return new DoubaoAdapter(page, config);
+    }
     default:
       throw new Error(
         `Unknown model: "${modelName}"\n` +
@@ -56,6 +61,7 @@ function getModelUrl(modelName) {
   const urls = {
     deepseek: 'https://chat.deepseek.com',
     gemini  : 'https://gemini.google.com/app',
+    doubao  : 'https://www.doubao.com/chat',
   };
   return urls[name] || urls.deepseek;
 }
@@ -67,6 +73,7 @@ function getModelDisplayName(modelName) {
   const names = {
     deepseek: 'DeepSeek',
     gemini  : 'Gemini',
+    doubao  : 'Doubao (豆包)',
   };
   return names[(modelName || '').toLowerCase()] || modelName;
 }
