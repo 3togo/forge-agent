@@ -180,7 +180,9 @@ function parseArgs(argv) {
         break;
 
       default:
-        if (a && a.startsWith('--history=')) {
+        if (a && a.startsWith('--model=')) {
+          opts.model = a.slice('--model='.length);
+        } else if (a && a.startsWith('--history=')) {
           opts.history = parseInt(a.split('=')[1]);
         } else if (a && a.startsWith('--history-search=')) {
           opts.historySearch = a.split('=')[1];
@@ -260,7 +262,7 @@ ${c('1;36', 'QUICK START')}
 ${c('1;36', 'CORE OPTIONS')}
   -i, --interactive      Multiple tasks with shared AI context
       --dir <path>       Set working directory (default: current dir)
-      --model <name>     AI model: deepseek (default) | gemini
+      --model <name>     AI model: deepseek (default) | gemini | doubao
       --profile <name>   Profile: default | backend | frontend |
                          data-science | devops
       --plan             Show execution plan before acting
@@ -517,6 +519,11 @@ async function startInteractiveMode(agent, config) {
 // ─────────────────────────────────────────────
 
 async function main() {
+  // ACP owns stdout from the first byte; never enter terminal setup/banner paths.
+  if (process.argv.slice(2).includes('--acp')) {
+    await require('./acp-entry').main(process.argv.slice(2));
+    return;
+  }
   const args = parseArgs(process.argv);
 
   // ── Shell Completions ──────────────────────────────────────────────────────
@@ -1388,14 +1395,6 @@ async function main() {
     await shutdown(0);
   }
 
-  // ── ACP mode ───────────────────────────────────────────────────────────────
-  if (args.acp) {
-    const AcpServer = require('./acp-server');
-    const acp = new AcpServer(agent);
-    acp.start();
-    return;
-  }
-
   // ── Validate we have a task or interactive mode ────────────────────────────
   if (!args.interactive && !args.task) {
     logger.warn('No task provided. Switching to interactive mode...\n');
@@ -1406,7 +1405,7 @@ async function main() {
   try {
     await agent.init();
   } catch (err) {
-    displayError(Errors.browserLaunchFailed(err));
+    displayError(Errors.browserLaunchFailed(err, path.resolve(config.SESSION_DIR)));
     if (config.DEBUG) console.error(err.stack);
     process.exit(1);
   }

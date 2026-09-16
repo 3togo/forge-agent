@@ -183,6 +183,44 @@ describe('Errors.browserLaunchFailed', () => {
     const err = Errors.browserLaunchFailed(null);
     expect(err.how.join(' ')).toMatch(/playwright install chromium/i);
   });
+
+  test.each([
+    'browserType.launchPersistentContext: Opening in existing browser session.\nCall log:\n  - <launched> pid=876041',
+    'The profile is already in use by another instance of Chromium.',
+    'The user data directory is already in use',
+    'Failed to create /tmp/session/SingletonLock: File exists (17)',
+    'Failed to create a ProcessSingleton for your profile directory.',
+  ])('explains profile conflicts: %s', message => {
+    const cause = new Error(message);
+    const err = Errors.browserLaunchFailed(cause, '/tmp/my session');
+    expect(err).toBeInstanceOf(AgentError);
+    expect(err.what).toBe('Browser session is already in use');
+    expect(err.why).toContain('/tmp/my session');
+    expect(err.why).not.toContain('Call log:');
+    expect(err.how.join(' ')).toMatch(/Ctrl\+C/);
+    expect(err.how.join(' ')).toContain('SESSION_DIR');
+    expect(err.how.join(' ')).not.toMatch(/playwright install|pkill/);
+    expect(err.cause).toBe(cause);
+  });
+
+  test('handles profile conflicts without a session directory', () => {
+    const err = Errors.browserLaunchFailed(new Error('Opening in existing browser session.'));
+    expect(err.why).toContain('the configured session directory');
+    expect(err.why).not.toContain('undefined');
+  });
+
+  test('preserves an already structured initialization error', () => {
+    const err = Errors.loginRequired();
+    expect(Errors.browserLaunchFailed(err)).toBe(err);
+  });
+
+  test('retains generic launch failures without recommending a broad process kill', () => {
+    const cause = new Error('spawn failed');
+    const err = Errors.browserLaunchFailed(cause);
+    expect(err.why).toBe('spawn failed');
+    expect(err.cause).toBe(cause);
+    expect(err.how.join(' ')).not.toContain('pkill');
+  });
 });
 
 describe('Errors.inputNotFound', () => {

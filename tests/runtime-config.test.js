@@ -144,6 +144,11 @@ describe('Runtime Config System', () => {
       expect(config.MODEL).toBe('gemini');
     });
 
+    test('MODEL: "doubao" is accepted', () => {
+      config.MODEL = 'doubao';
+      expect(config.MODEL).toBe('doubao');
+    });
+
     test('HEADLESS: "yes" is rejected (must be boolean)', () => {
       const before = config.HEADLESS;
       config.HEADLESS = 'yes';

@@ -191,7 +191,7 @@ describe('Module loading integration', () => {
       url: jest.fn().mockReturnValue('https://chat.deepseek.com'),
     };
     const mockConfig = { STABLE_DELAY: 1500, RESPONSE_TIMEOUT: 60000 };
-    expect(SUPPORTED_MODELS.length).toBe(2);
+    expect(SUPPORTED_MODELS).toEqual(['deepseek', 'gemini', 'doubao']);
     SUPPORTED_MODELS.forEach(model => {
       expect(() => getAdapter(model, mockPage, mockConfig)).not.toThrow();
     });

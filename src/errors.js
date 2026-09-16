@@ -216,7 +216,23 @@ const Errors = {
 
   // ── Browser / AI errors ─────────────────────────────────────────────
 
-  browserLaunchFailed(cause) {
+  browserLaunchFailed(cause, sessionDir) {
+    if (cause instanceof AgentError) return cause;
+
+    const message = cause?.message || '';
+    if (/opening in existing browser session|profile.*(?:already in use|in use by another)|user data directory is already in use|failed to create.*SingletonLock|failed to create a ProcessSingleton/i.test(message)) {
+      return new AgentError(
+        'Browser session is already in use',
+        `Another Chromium or Forge Agent process is using ${sessionDir || 'the configured session directory'}. Only one browser can use this directory at a time.`,
+        [
+          'Return to the existing Forge Agent terminal and use that session, or press Ctrl+C there before retrying.',
+          'If the browser was opened separately, close the browser using this session directory before retrying.',
+          'To run another agent concurrently, set SESSION_DIR to a different directory in forge-agent.config.json; the new session requires its own login.',
+        ],
+        cause
+      );
+    }
+
     return new AgentError(
       'Failed to launch the browser',
       cause ? cause.message : 'Playwright could not start Chromium.',
@@ -224,7 +240,7 @@ const Errors = {
         'Run: npx playwright install chromium',
         'Check that you have enough disk space (~150 MB for Chromium)',
         'Try running without --headless first',
-        'Check for conflicting Chromium processes: pkill chromium',
+        'Check whether another browser is using the configured session directory',
       ],
       cause
     );

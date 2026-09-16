@@ -1,230 +1,151 @@
-// src/acp-server.js — ACP (Agent Communication Protocol) stdio server
+// ACP v1 transport. Browser/model work runs in an isolated process.
 'use strict';
-
-const readline = require('readline');
-const logger   = require('./logger');
-
-const PROTOCOL_VERSION = '0.12.1';
+const fs = require('fs');
+const path = require('path');
+const os = require('os');
+const { randomUUID } = require('crypto');
+const { fork } = require('child_process');
+const { stopWorker, descendants, identity } = require('./acp-process');
 
 class AcpServer {
-  constructor(agent) {
-    this.agent    = agent;
+  constructor(connection, options = {}) {
+    this.connection = connection;
+    this.options = options;
     this.sessions = new Map();
-    this._rl      = null;
-    this._started = false;
+    this.owner = null;
+    this.initialized = false;
+    this.closed = false;
   }
 
-  start() {
-    if (this._started) return;
-    this._started = true;
-
-    this._rl = readline.createInterface({
-      input  : process.stdin,
-      output : process.stdout,
-      crlfDelay: Infinity,
-    });
-
-    this._rl.on('line', (line) => {
-      this._handleLine(line).catch(err => {
-        this._send({ jsonrpc: '2.0', error: { code: -32603, message: err.message } });
-      });
-    });
-
-    this._rl.on('close', () => {
-      this._shutdown();
-    });
-
-    process.stdout.write = this._passthroughWrite();
-  }
-
-  _passthroughWrite() {
-    const original = process.stdout.write.bind(process.stdout);
-    return (chunk, ...args) => {
-      const lines = String(chunk).split('\n').filter(l => l.trim());
-      for (const line of lines) {
-        if (line.startsWith('{') && line.includes('"jsonrpc"')) continue;
-        this._send({ jsonrpc: '2.0', method: 'Message', params: { content: line, role: 'log' } });
-      }
-      return original(chunk, ...args);
+  initialize() {
+    this.initialized = true;
+    return {
+      protocolVersion: 1,
+      agentInfo: { name: 'forge-agent', title: 'Forge Browser Agent', version: require('../package.json').version },
+      agentCapabilities: { loadSession: false, promptCapabilities: { image: false, audio: false, embeddedContext: false } },
+      authMethods: [],
     };
   }
 
-  _send(msg) {
-    process.stdout.write(JSON.stringify(msg) + '\n');
+  async newSession({ cwd, mcpServers = [] }) {
+    if (!this.initialized || this.closed) throw new Error('Initialize the connection first.');
+    if (!path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('cwd must be an existing absolute directory.');
+    if (mcpServers.length) throw new Error('MCP servers are not supported.');
+    const sessionId = randomUUID();
+    this.sessions.set(sessionId, { id: sessionId, cwd: fs.realpathSync(cwd), busy: false, cancelled: false, worker: null });
+    return { sessionId };
   }
 
-  _sendResult(id, result) {
-    this._send({ jsonrpc: '2.0', id, result });
+  update(session, update) {
+    return this.connection.sessionUpdate({ sessionId: session.id, update });
   }
 
-  _sendError(id, code, message) {
-    this._send({ jsonrpc: '2.0', id, error: { code, message } });
+  message(session, text) {
+    return this.update(session, { sessionUpdate: 'agent_message_chunk', content: { type: 'text', text } });
   }
 
-  _sendNotification(method, params) {
-    this._send({ jsonrpc: '2.0', method, params });
-  }
-
-  async _handleLine(line) {
-    let msg;
-    try {
-      msg = JSON.parse(line);
-    } catch {
-      return;
-    }
-
-    const { id, method, params } = msg;
-
-    switch (method) {
-      case 'initialize':
-        this._sendResult(id, {
-          protocolVersion: PROTOCOL_VERSION,
-          agentInfo: {
-            name   : 'forge-agent',
-            version: require('../package.json').version,
-          },
-          capabilities: {
-            streaming   : true,
-            toolApproval: true,
-            sessionLoad : true,
-          },
-        });
-        break;
-
-      case 'new_session':
-        await this._newSession(id, params);
-        break;
-
-      case 'load_session':
-        await this._loadSession(id, params);
-        break;
-
-      case 'prompt':
-        await this._handlePrompt(id, params);
-        break;
-
-      case 'cancel':
-        this._sendNotification('cancelled', { sessionId: params?.sessionId });
-        break;
-
-      default:
-        if (id) this._sendError(id, -32601, `Unknown method: ${method}`);
-    }
-  }
-
-  async _newSession(id, params) {
-    const sessionId = `session-${Date.now()}`;
-    const cwd = params?.cwd || process.cwd();
-
-    this.sessions.set(sessionId, {
-      id: sessionId,
-      cwd,
-      status: 'idle',
-      lastPrompt  : null,
-      lastOutput  : null,
-    });
-
-    this._sendResult(id, { sessionId, status: 'idle' });
-  }
-
-  async _loadSession(id, params) {
-    const sessionId = params?.sessionId;
-    if (!sessionId || !this.sessions.has(sessionId)) {
-      this._sendError(id, -32602, `Session not found: ${sessionId}`);
-      return;
-    }
-
+  async prompt({ sessionId, prompt }) {
     const session = this.sessions.get(sessionId);
-    this._sendResult(id, { sessionId, status: session.status });
-  }
-
-  async _handlePrompt(id, params) {
-    const sessionId = params?.sessionId;
-    const text      = params?.text;
-
-    if (!sessionId || !this.sessions.has(sessionId)) {
-      this._sendError(id, -32602, `Session not found: ${sessionId}`);
-      return;
-    }
-
-    const session = this.sessions.get(sessionId);
-    if (session.status === 'running') {
-      this._sendError(id, -32602, 'Session is busy');
-      return;
-    }
-
-    session.status     = 'running';
-    session.lastPrompt = text;
-
-    this._sendResult(id, { sessionId, status: 'running' });
-
+    if (!session || this.closed) throw new Error('Unknown or closed session.');
+    if (session.busy) throw new Error('This session already has an active prompt.');
+    if (session.cancelled) throw new Error('This session was interrupted. Start a new chat.');
+    if (this.owner && this.owner !== sessionId) throw new Error('Another conversation owns this connection’s browser. Use a new agent connection.');
+    if (!prompt.length || prompt.some(b => !['text', 'resource_link'].includes(b.type))) throw new Error('Only text and resource links are supported.');
+    const text = prompt.map(b => b.type === 'text' ? b.text : `${b.name || 'Resource'}: ${b.uri}`).join('\n');
+    if (text.trimStart().startsWith('/')) throw new Error('Terminal slash commands are not supported in ACP mode.');
+    this.owner = sessionId;
+    session.busy = true;
     try {
-      if (!this.agent.browser.page) {
-        await this.agent.init();
-      }
-
-      const result = await this.agent.run(text);
-
-      session.status     = 'idle';
-      session.lastOutput = result;
-
-      this._sendNotification('Message', {
-        sessionId,
-        content: result || 'Task completed.',
-        role   : 'assistant',
+      if (!session.worker) this.spawn(session);
+      const result = await new Promise((resolve, reject) => {
+        session.pending = { resolve, reject };
+        session.worker.send({ type: 'prompt', text });
       });
-
-      this._sendNotification('session/end', { sessionId, status: 'idle' });
+      return { stopReason: session.cancelled ? 'cancelled' : result.stopReason || 'end_turn' };
     } catch (err) {
-      session.status = 'interrupted';
-      this._sendNotification('Error', {
-        sessionId,
-        message: err.message,
-      });
-      this._sendNotification('session/end', { sessionId, status: 'interrupted' });
+      if (session.cancelled) return { stopReason: 'cancelled' };
+      await this.message(session, `Forge Agent stopped: ${err.message}\nStart a new chat after resolving the error.\n`);
+      await this.stop(session);
+      throw err;
+    } finally {
+      session.pending = null;
+      session.busy = false;
     }
   }
 
-  sendToolCallStart(toolName, args) {
-    this._sendNotification('ToolCallStart', { tool: toolName, arguments: args });
-  }
-
-  sendToolCallProgress(toolName, result) {
-    this._sendNotification('ToolCallProgress', { tool: toolName, result });
-  }
-
-  sendToolCallEnd(toolName) {
-    this._sendNotification('ToolCallEnd', { tool: toolName });
-  }
-
-  requestPermission(toolName, args) {
-    return new Promise(resolve => {
-      const reqId = `perm-${Date.now()}`;
-      this._sendNotification('PermissionRequest', { id: reqId, tool: toolName, arguments: args });
-
-      const handler = (line) => {
-        try {
-          const msg = JSON.parse(line);
-          if (msg?.method === 'PermissionResponse' && msg?.params?.id === reqId) {
-            this._rl.removeListener('line', handler);
-            resolve(msg.params.allow === true);
-          }
-        } catch {}
-      };
-
-      this._rl.on('line', handler);
+  spawn(session) {
+    const worker = fork(this.options.workerFile || path.join(__dirname, 'acp-worker.js'), [], {
+      cwd: session.cwd, detached: process.platform !== 'win32',
+      stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+      env: { ...process.env, FORGE_ACP_MODEL: this.options.model || 'doubao',
+        FORGE_ACP_SESSION_DIR: this.options.sessionDir || path.join(os.homedir(), '.deepseek-agent', 'acp-session'),
+        FORGE_ACP_WORKSPACE: session.cwd },
+    });
+    session.worker = worker;
+    worker.acpIdentity = identity(worker.pid);
+    session.owned = new Map();
+    session.monitor = setInterval(() => {
+      if (identity(worker.pid)?.start !== worker.acpIdentity?.start) return;
+      for (const p of descendants(worker.pid)) session.owned.set(`${p.pid}:${p.start}`, p);
+    }, 500);
+    session.monitor.unref();
+    // Even accidental worker stdout must never contaminate the protocol stream.
+    worker.stdout.on('data', chunk => process.stderr.write(chunk));
+    worker.stderr.on('data', chunk => process.stderr.write(chunk));
+    session.queue = Promise.resolve();
+    worker.on('message', event => {
+      session.queue = session.queue.then(() => this.event(session, event)).catch(err => session.pending?.reject(err));
+    });
+    worker.on('error', err => session.pending?.reject(err));
+    worker.on('exit', () => {
+      // Drain messages already delivered before reporting an unexpected exit.
+      session.queue.then(() => {
+        session.pending?.reject(new Error('Agent worker exited. No actions were replayed.'));
+        return this.stop(session);
+      }).catch(err => process.stderr.write(`Worker cleanup: ${err.message}\n`));
     });
   }
 
-  _shutdown() {
-    this._started = false;
-    for (const [, session] of this.sessions) {
-      if (session.status === 'running') {
-        session.status = 'interrupted';
-      }
-    }
-    this.sessions.clear();
+  async event(session, event) {
+    if (session.cancelled || this.closed) return;
+    if (event.type === 'update') await this.update(session, event.update);
+    else if (event.type === 'message') await this.message(session, event.text);
+    else if (event.type === 'permission') {
+      // Do not block the event queue on UI input: cancellation must remain responsive.
+      this.connection.requestPermission({
+        sessionId: session.id, toolCall: event.toolCall,
+        options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
+          { optionId: 'deny', name: 'Decline', kind: 'reject_once' }],
+      }).then(reply => {
+        if (session.cancelled || this.closed || !session.worker?.connected) return;
+        session.worker.send({ type: 'permission', id: event.id,
+          allow: reply.outcome?.outcome === 'selected' && reply.outcome.optionId === 'allow' });
+      }).catch(() => {
+        if (!session.cancelled && session.worker?.connected) session.worker.send({ type: 'permission', id: event.id, allow: false });
+      });
+    } else if (event.type === 'done') session.pending?.resolve(event);
+    else if (event.type === 'error') session.pending?.reject(new Error(event.message));
+  }
+
+  async stop(session) {
+    if (session.stopping) return session.stopping;
+    session.cancelled = true;
+    clearInterval(session.monitor);
+    session.stopping = stopWorker(session.worker, [...(session.owned?.values() || [])]).finally(() => {
+      session.pending?.resolve({ stopReason: 'cancelled' });
+      if (this.owner === session.id) this.owner = null;
+    });
+    return session.stopping;
+  }
+
+  async cancel({ sessionId }) {
+    const session = this.sessions.get(sessionId);
+    if (session?.busy) await this.stop(session);
+  }
+
+  async close() {
+    this.closed = true;
+    await Promise.all([...this.sessions.values()].map(s => this.stop(s)));
   }
 }
-
 module.exports = AcpServer;

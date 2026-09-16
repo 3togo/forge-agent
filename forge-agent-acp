@@ -1,0 +1,4 @@
+#!/usr/bin/env bash
+set -euo pipefail
+agent_root="$(dirname -- "$(readlink -f -- "$0")")"
+exec node "$agent_root/src/acp-entry.js" "$@"

@@ -2,6 +2,7 @@
 
 const path = require('path');
 const os   = require('os');
+const { SUPPORTED_MODELS } = require('./adapter-factory');
 
 // ─────────────────────────────────────────────
 //  Command definition shape
@@ -296,7 +297,7 @@ const BUILT_IN_COMMANDS = [
   {
     name       : 'think',
     aliases    : ['thinking', 'r1'],
-    description: 'Toggle chain-of-thought reasoning mode on/off',
+    description: 'Toggle thinking preference (browser reasoning control not implemented)',
     usage      : '/think [on|off]',
     category: 'Model',
     requiresArg: false,
@@ -307,13 +308,9 @@ const BUILT_IN_COMMANDS = [
 
       const state = config.SHOW_THINKING;
       return [
-        `Chain-of-thought thinking: ${state ? 'ON 💭' : 'OFF'}`,
-        state
-          ? '  DeepSeek will reason step-by-step (takes longer, better results).'
-          : '  DeepSeek will respond directly without showing reasoning.',
-        '',
-        '  Note: Takes effect on the next task you run.',
-        '  Type /new to start a fresh conversation with this setting.',
+        `Thinking preference: ${state ? 'ON 💭' : 'OFF'}`,
+        '  This setting is not connected to browser reasoning controls yet.',
+        '  Use the AI website\'s reasoning control, if available.',
       ].join('\n');
     },
   },
@@ -323,7 +320,7 @@ const BUILT_IN_COMMANDS = [
     name: 'model',
     aliases: ['m', 'switch'],
     description: 'Switch AI model for this session',
-    usage: '/model <deepseek|chatgpt|gemini>',
+    usage: `/model <${SUPPORTED_MODELS.join('|')}>`,
     category: 'Model',
     requiresArg: true,
     execute: async ({ arg, config, agent, logger }) => {

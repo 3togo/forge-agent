@@ -140,6 +140,33 @@ describe('Slash Command System', () => {
       expect(result).toContain('requires an argument');
     });
 
+    test('/help model lists supported models without disabled ChatGPT', async () => {
+      const result = await makeRouter().execute('/help model');
+      expect(result).toContain('/model <deepseek|gemini|doubao>');
+      expect(result).not.toContain('chatgpt');
+    });
+
+    test.each(['/model', '/m', '/switch'])('%s switches the browser to Doubao', async command => {
+      const config = { ...mockConfig };
+      const page = {
+        goto: jest.fn().mockResolvedValue(),
+        waitForTimeout: jest.fn().mockResolvedValue(),
+      };
+      const agent = { browser: { page, adapter: null } };
+      const router = new CommandRouter({ config, agent, logger: { dim: jest.fn() } });
+      const result = await router.execute(`${command} doubao`);
+      expect(config.MODEL).toBe('doubao');
+      expect(agent.browser.adapter).toBeInstanceOf(require('../src/adapters/doubao-adapter'));
+      expect(page.goto).toHaveBeenCalledWith('https://www.doubao.com/chat', expect.any(Object));
+      expect(result).toContain('Switched to Doubao');
+    });
+
+    test('/think describes its current limitation', async () => {
+      const result = await makeRouter().execute('/think on');
+      expect(result).toContain('not connected to browser reasoning controls');
+      expect(result).not.toContain('DeepSeek will');
+    });
+
     test('/status returns session info', async () => {
       const router = makeRouter();
       const result = await router.execute('/status');

@@ -359,7 +359,7 @@ class DeepSeekAgent {
             }
           }
 
-          if (!isReadOnly(parsed.name)) {
+          if (!this.options.executeTool && !isReadOnly(parsed.name)) {
             const category = getCategory(parsed.name);
             if (!this.permissionStore.isPreApproved(category)) {
               const detail = parsed.args?.path
@@ -402,9 +402,10 @@ class DeepSeekAgent {
           let isError = false;
 
           try {
-            result  = await executeTool(parsed.name, parsed.args);
+            result  = await (this.options.executeTool || executeTool)(parsed.name, parsed.args);
             logger.toolResult(result, false, parsed.name);
           } catch (err) {
+            if (err.acpDenied) throw err;
             result  = err.message || String(err);
             isError = true;
             logger.toolResult(result, true, parsed.name);

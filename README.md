@@ -58,6 +58,24 @@ forge-agent --interactive
 fa "add TypeScript to this project"
 ```
 
+For Linux, this checkout includes a startup script for browser session conflicts:
+
+```bash
+./smart-start.sh                  # Recover a suspended instance and start interactively
+./smart-start.sh --check          # Inspect only; exits nonzero if the session is busy
+./smart-start.sh --restart        # Explicitly stop the existing instance, even if active
+./smart-start.sh --interactive --debug
+```
+
+The script uses `forge-agent` from your PATH and its configured `SESSION_DIR`,
+including configuration in the current project. Set `FORGE_AGENT_BIN` to select
+a specific installed executable. It preserves saved logins and browser data,
+and only stops verified processes belonging to that installation and session.
+An active session is left running unless you pass `--restart`. Recovery tries
+graceful shutdown, resumes suspended processes, then force-stops only the same
+verified processes if they remain stuck. Locks from another host and browsers
+owned by another application require manual resolution.
+
 ---
 
 ## Features
@@ -234,11 +252,13 @@ forge-agent --model=doubao "task"     # or --model=豆包
 
 ### ACP Protocol (GUI Integration)
 
-Forge Agent supports the Agent Communication Protocol (ACP) via stdio JSON-RPC,
-enabling integration with GUI clients like AionUi:
+Forge Agent provides a Linux ACP v1 stdio server for clients such as AionUi,
+with GUI tool approvals, workspace isolation, and cancellation. See the
+[AionUi setup guide](docs/AIONUI.md) for registration, login, and current limits.
 
 ```bash
-forge-agent --acp    # start in ACP server mode
+forge-agent-acp --model=doubao   # after npm install -g .
+./forge-agent-acp --model=doubao # directly from this checkout
 ```
 
 ---
