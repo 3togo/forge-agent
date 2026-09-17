@@ -188,7 +188,7 @@ class DeepSeekAgent {
           logger.dim(firstMsg.slice(0, 600) + '...');
         }
 
-        logger.info('Sending task to DeepSeek...');
+        logger.info(`Sending task to ${config.MODEL}...`);
 
         try {
           await this.browser.sendMessage(firstMsg);

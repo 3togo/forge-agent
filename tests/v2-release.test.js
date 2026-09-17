@@ -7,9 +7,9 @@ const path = require('path');
 describe('v2.0.0 Release Verification', () => {
   const root = path.join(__dirname, '..');
 
-  test('package.json version is "2.0.1"', () => {
+  test('package.json version is "2.0.2"', () => {
     const pkg = JSON.parse(fs.readFileSync(path.join(root, 'package.json'), 'utf8'));
-    expect(pkg.version).toBe('2.0.1');
+    expect(pkg.version).toBe('2.0.2');
   });
 
   test('package.json name is "@omar-azam/forge-agent"', () => {
