@@ -46,6 +46,11 @@ class DeepSeekBrowser {
       ignoreDefaultArgs: ['--enable-automation'],
     });
 
+    if (config.ACP_AUTH_FILE) {
+      try { await require('./browser-auth').restoreAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
+      catch (err) { logger.warn(`Could not restore saved login: ${err.message}`); }
+    }
+
     // Grab existing page or open a new one
     const pages   = this.context.pages();
     this.page     = pages.length > 0 ? pages[0] : await this.context.newPage();
@@ -161,7 +166,13 @@ class DeepSeekBrowser {
 
   async waitForResponse() {
     if (!this.adapter) throw new Error('Browser not initialized');
-    return await this.adapter.waitForResponse();
+    const response = await this.adapter.waitForResponse();
+    // A successful provider reply is the point at which we save usable login state.
+    if (config.ACP_AUTH_FILE) {
+      try { await require('./browser-auth').saveAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
+      catch (err) { logger.warn(`Could not save login for new chats: ${err.message}`); }
+    }
+    return response;
   }
 
   // ── Debug / Calibration Utilities ─────────────────────────────────────────

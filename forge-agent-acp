@@ -1,4 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 agent_root="$(dirname -- "$(readlink -f -- "$0")")"
+if ! command -v node >/dev/null 2>&1; then
+  echo 'Node.js is missing. Install Node.js 18 or newer and npm, then run this command again.' >&2
+  echo 'On Ubuntu: sudo apt update && sudo apt install nodejs npm' >&2
+  exit 1
+fi
 exec node "$agent_root/src/acp-entry.js" "$@"

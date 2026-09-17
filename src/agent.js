@@ -220,6 +220,7 @@ class DeepSeekAgent {
         try {
           rawResponse = await this.browser.waitForResponse();
         } catch (err) {
+          if (err.acpBrowserRecoverable && config.NO_INTERACTIVE) throw err;
           logger.warn(`Response failed: ${err.message}`);
           progress.recordError(err.message);
 
@@ -297,6 +298,10 @@ class DeepSeekAgent {
 
         // Parse the response
         const parsed = parseResponse(rawResponse);
+        // ACP chats accept ordinary answers without forcing tool-call corrections.
+        if (this.options.conversationalReplies && parsed.type === 'text') {
+          parsed.type = 'final';
+        }
 
         // ── Case 1: Tool call ──────────────────────────────────────────────
         if (parsed.type === 'tool_call') {

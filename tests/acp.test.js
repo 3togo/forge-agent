@@ -24,6 +24,15 @@ describe('ACP wire handshake', () => {
       expect(fs.readFileSync(path.join(temp, 'proof.txt'), 'utf8')).toBe('ACP verified\n');
     } finally { fs.rmSync(temp, { recursive: true, force: true }); }
   });
+  test('real agent loop delivers a plain Chinese provider reply through SDK before ending the turn', () => {
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-acp-conversation-'));
+    try {
+      const result = spawnSync(process.execPath, [path.join(__dirname, 'fixtures/acp-conversation-client.mjs'), temp], { encoding: 'utf8', timeout: 10000 });
+      expect(result.stderr).toBe('');
+      expect(result.status).toBe(0);
+      expect(result.stdout).toContain('CONVERSATION_DELIVERED_ONCE');
+    } finally { fs.rmSync(temp, { recursive: true, force: true }); }
+  });
   test.each(['src/acp-entry.js', 'src/index.js'])('%s emits only ACP JSON', entry => {
     const input = [
       { jsonrpc: '2.0', id: 0, method: 'initialize', params: { protocolVersion: 1, clientCapabilities: {} } },
@@ -47,7 +56,7 @@ describe('ACP worker lifecycle', () => {
       sessionUpdate: jest.fn(async event => updates.push(event.update)),
       requestPermission: jest.fn(async () => ({ outcome: { outcome: 'selected', optionId: 'allow' } })),
     };
-    server = new AcpServer(conn, { model: 'doubao', workerFile: path.join(__dirname, 'fixtures/acp-worker.cjs'), sessionDir: path.join(temp, 'browser') });
+    server = new AcpServer(conn, { model: 'doubao', workerFile: path.join(__dirname, 'fixtures/acp-worker.cjs'), sessionDir: path.join(temp, 'browser'), permissionStateDir: path.join(temp, 'permissions') });
     server.initialize();
     sid = (await server.newSession({ cwd: temp, mcpServers: [] })).sessionId;
   });
@@ -57,6 +66,48 @@ describe('ACP worker lifecycle', () => {
   test('binds the worker to the selected workspace and returns end_turn', async () => {
     expect(await server.prompt(prompt(sid, 'cwd'))).toEqual({ stopReason: 'end_turn' });
     expect(updates.some(x => x.content?.text === temp)).toBe(true);
+  });
+  test('chat approval skips later writes but expires in a new chat', async () => {
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-chat' } });
+    await server.prompt(prompt(sid, 'write'));
+    await server.prompt(prompt(sid, 'write'));
+    expect(conn.requestPermission).toHaveBeenCalledTimes(1);
+    expect(conn.requestPermission.mock.calls[0][0].options.map(o => o.optionId)).toEqual(['allow', 'project-chat', 'project-always', 'deny']);
+    await server.close();
+    server = new AcpServer(conn, { workerFile: path.join(__dirname, 'fixtures/acp-worker.cjs'), permissionStateDir: path.join(temp, 'permissions') });
+    server.initialize(); sid = (await server.newSession({ cwd: temp })).sessionId;
+    await server.prompt(prompt(sid, 'write'));
+    expect(conn.requestPermission).toHaveBeenCalledTimes(2);
+  });
+  test('always approval persists for this project, but excludes commands and other projects', async () => {
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-always' } });
+    await server.prompt(prompt(sid, 'write'));
+    const directory = path.join(temp, 'permissions');
+    const record = path.join(directory, fs.readdirSync(directory)[0]);
+    expect(fs.statSync(record).mode & 0o777).toBe(0o600);
+    await server.close();
+    server = new AcpServer(conn, { workerFile: path.join(__dirname, 'fixtures/acp-worker.cjs'), permissionStateDir: directory });
+    server.initialize(); sid = (await server.newSession({ cwd: temp })).sessionId;
+    conn.requestPermission.mockClear();
+    await server.prompt(prompt(sid, 'write'));
+    expect(conn.requestPermission).not.toHaveBeenCalled();
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-always' } });
+    await server.prompt(prompt(sid, 'test'));
+    expect(conn.requestPermission).toHaveBeenCalledTimes(1);
+    expect(conn.requestPermission.mock.calls[0][0].options.map(o => o.optionId)).toEqual(['allow', 'deny']);
+    expect(updates.some(u => u.content?.text?.includes('Permission declined'))).toBe(true);
+    const other = path.join(temp, 'other'); fs.mkdirSync(other);
+    const next = (await server.newSession({ cwd: other })).sessionId;
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'cancelled' } });
+    await server.prompt(prompt(next, 'write'));
+    expect(conn.requestPermission).toHaveBeenCalledTimes(2);
+    expect(fs.existsSync(path.join(other, 'proof.txt'))).toBe(false);
+  });
+  test('project approval still rejects paths outside the workspace', async () => {
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-chat' } });
+    await server.prompt(prompt(sid, 'write'));
+    await expect(server.prompt(prompt(sid, 'escape'))).rejects.toThrow('outside');
+    expect(conn.requestPermission).toHaveBeenCalledTimes(1);
   });
   test('approved write reports a diff and preserves output', async () => {
     expect(await server.prompt(prompt(sid, 'write'))).toEqual({ stopReason: 'end_turn' });
@@ -120,7 +171,8 @@ describe('ACP worker lifecycle', () => {
     await server.close();
     expect(await turn).toEqual({ stopReason: 'cancelled' });
   });
-  test('rejects concurrent prompts and a second browser owner', async () => {
+  test('rejects concurrent prompts and a second owner of an explicit profile', async () => {
+    server.options.sessionDir = temp;
     conn.requestPermission.mockImplementation(() => new Promise(() => {}));
     const turn = server.prompt(prompt(sid, 'write'));
     await until(() => conn.requestPermission.mock.calls.length);

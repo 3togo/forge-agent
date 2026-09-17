@@ -7,8 +7,19 @@ with `--model=deepseek` or `--model=gemini`.
 
 ## Register in AionUi
 
-Running `./forge-agent-acp` alone does not open AionUi or show a chat prompt.
-It waits for protocol messages from a GUI client. Stop that terminal process
+Running `./forge-agent-acp` in a desktop terminal restarts AionUi if it is installed.
+Existing AionUi processes owned by your user receive SIGTERM; after eight seconds,
+unresponsive processes receive SIGKILL. Active chats disconnect during restart.
+Without a desktop display, the launcher leaves existing processes alone.
+The GUI continues running after Ctrl+C stops this
+terminal server. Startup errors are recorded in `~/.local/state/forge-agent/aionui.log`.
+The terminal waits for protocol messages from a GUI client. The launcher
+checks PATH and common AppImage locations for AionUi. If it is not detected,
+it offers to download the latest official Linux installer for x64 or arm64 and
+install it using `sudo apt install` (Debian/Ubuntu). Accept with `y`; sudo may
+ask for your password. Installation errors stop startup with recovery guidance.
+Client launches never prompt, install, or open AionUi. `--setup` installs prerequisites
+without opening the GUI. Stop that terminal process
 with Ctrl+C and configure AionUi to launch the command automatically below.
 
 In **Settings → Agent Management → Custom Agents**, add a new agent:
@@ -39,9 +50,31 @@ After `npm install -g .`, `forge-agent-acp --model=doubao` is also available.
 `smart-start.sh` as the GUI command: its diagnostic output is intended for a
 terminal, not an ACP client.
 
-Dependencies are installed with `npm install`; if Chromium is missing, run
+Run `./forge-agent-acp --setup` to install missing runtime packages and Chromium.
+When launched in a terminal, Forge identifies missing dependencies and offers to
+install them before displaying the connection instructions. AionUi launches never
+prompt or install automatically; setup instructions go to stderr so ACP stdout
+stays valid JSON. Node.js 18 or newer and npm must be installed first.
+
+Dependencies can also be installed with `npm install`; if Chromium is missing, run
 `npx playwright install chromium` from this checkout. Test Connection does not
 open a browser, launch a worker, or contact the AI service.
+
+Composer and response-wait errors end the turn with a visible explanation and
+keep the browser open for inspection or login. Retry in the same chat after
+resolving the issue; if a message was already sent, check its reply first.
+Canceling an active turn or closing the connection still stops the worker and browser.
+
+Ordinary conversational replies are returned to AionUi immediately, including
+answers following project file reads. Coding tool calls still follow the agent loop and
+approval flow.
+
+Workspace mappings for sessions are saved under `~/.deepseek-agent/acp-sessions`.
+If AionUi reconnects using a known session ID, Forge restores the workspace and
+reports that conversation context has reset. It does not replay earlier actions
+or claim to restore chat history (`session/load` remains unsupported). Session
+IDs created before this feature require one new AionUi chat. Unknown IDs, changed
+models, and missing workspaces are rejected with instructions to start a new chat.
 
 ## Login and browser ownership
 
@@ -51,15 +84,21 @@ waits up to three minutes for the chat input to become available. Input readines
 is not proof of authentication: if the website asks for login after submitting,
 complete login before retrying in a new chat.
 
-The GUI uses `~/.deepseek-agent/acp-session`, separate from the interactive CLI
-profile. It preserves its own cookies and login. Only one live browser can own
-this profile. If another GUI connection owns it, close that connection first;
-Forge does not kill it or delete profile locks. To intentionally run a second
-instance, pass `--session-dir /absolute/different/profile` and log in separately.
+Each ACP conversation uses `~/.deepseek-agent/acp-profiles/<model>/<session-id>`.
+This keeps simultaneous chats and project chats from competing for the same
+Chromium profile. A restored session reuses its profile and saved login. After a successful provider reply, cookies and local storage for that model are
+saved in `~/.deepseek-agent/acp-auth/<model>.json` with owner-only permissions.
+New conversations restore that login into their isolated profiles. You may need
+to log in once after upgrading, or again when Doubao expires the session. The older shared `acp-session` profile
+is left in place; existing running conversations continue using it until closed.
+An explicit `--session-dir` overrides this isolation, so use different directories
+for simultaneous conversations when setting that option. Explicit profiles do
+not participate in shared login state.
 
-Within one ACP connection, a single conversation owns the browser. More session
-IDs can be created, but their prompts are rejected while another conversation
-owns it. Start a separate connection/profile for concurrent conversations.
+One ACP connection can host multiple conversations with independent workers and
+browser profiles. When an explicit `--session-dir` is supplied, only one
+conversation can own that profile; use a separate connection and profile for
+another conversation.
 
 ## Implemented behavior
 
@@ -70,9 +109,18 @@ owns it. Start a separate connection/profile for concurrent conversations.
 - Tool start/result events and bounded text-file diffs appear in the client.
   Final answers appear when Forge finishes; token-by-token answer streaming is
   not implemented.
-- Mutating tools and tools that run code (including `run_tests`) require an
-  explicit **Allow once** response. Decline, cancellation, connection errors,
-  and unrecognized responses never grant approval. A decline ends the turn.
+- File-write approvals offer **Allow once**, **Allow project file writes for
+  this chat**, and **Allow always: file writes in this project**. Chat approval
+  lasts for that conversation; always approval persists across agent restarts
+  and future chats for the same canonical project path. This covers writing,
+  appending, replacing, patching, batch writes, and creating directories.
+  Deletion, moving files, commands, tests, and other tools still require their
+  own **Allow once** approval. Project path and symlink checks remain enforced.
+  Permanent grants are stored as owner-only JSON files under
+  `~/.deepseek-agent/acp-permissions/`. To revoke one, delete the JSON file whose
+  `workspace` matches your project, then start a new chat.
+  Decline, cancellation, connection errors, and unrecognized responses never
+  grant approval. A decline ends the turn.
   Saved terminal permissions do not bypass these GUI approvals.
 - File-path checks and strict workspace mode apply to file tools. Approved shell
   commands still run as your Linux user; this is not an OS sandbox.
@@ -99,10 +147,17 @@ diffs, workspace checks, the real agent-loop execution hook, cancellation of a
 blocking shell process and its children, and disconnect cleanup. Browser/model
 responses are replaced by fixtures; no AI website is contacted by these tests.
 
-A live AionUi/Doubao round trip has not been verified in this implementation
-session because the browser-control surface was unavailable. After registration,
-first use Test Connection, then try a small project task and verify both Allow
-once and Decline before a longer run.
+A live Doubao-to-ACP reply has been verified using the production agent and the
+official ACP client SDK. To repeat the live smoke test (this contacts Doubao):
+
+```bash
+node scripts/acp-live-check.mjs
+```
+
+It checks two turns in one conversation and another independent conversation,
+using a temporary empty project and denying tool permission requests. It uses
+the saved Doubao login. This verifies the provider and ACP transport; AionUi's
+rendering still needs a separate check through an authenticated AionUi client.
 
 The architectural reference was the local DuoBaoAgent project; see the
 [original assessment](AIONUI-ASSESSMENT.md).

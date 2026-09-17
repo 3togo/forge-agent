@@ -17,11 +17,11 @@ const mockPage = {
   url: jest.fn().mockReturnValue('https://www.doubao.com/chat'),
   isClosed: jest.fn().mockReturnValue(false),
   locator: jest.fn().mockReturnValue({
-    first: {
+    first: jest.fn().mockReturnValue({
       fill: jest.fn().mockResolvedValue(undefined),
       evaluate: jest.fn().mockResolvedValue('test'),
       press: jest.fn().mockResolvedValue(undefined),
-    },
+    }),
   }),
 };
 
@@ -69,4 +69,6 @@ describe('DoubaoAdapter', () => {
   });
 
   test('_cleanText strips thinking blocks', () => {
-    expect(adapter._cleanText('<tool_call>todowrite
+    expect(adapter._cleanText('<think>reasoning</think>\nAnswer')).toBe('Answer');
+  });
+});

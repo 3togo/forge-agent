@@ -11,6 +11,7 @@ function main() {
     MODEL: process.env.FORGE_ACP_MODEL,
     WORKING_DIR: process.env.FORGE_ACP_WORKSPACE,
     SESSION_DIR: process.env.FORGE_ACP_SESSION_DIR,
+    ACP_AUTH_FILE: process.env.FORGE_ACP_AUTH_FILE || null,
     HEADLESS: false, NO_TUI: true, NO_INTERACTIVE: true, STRICT_SANDBOX: true,
     OUTPUT_FILE: null, DISABLE_SPONSOR_NUDGE: true,
   });
@@ -65,7 +66,8 @@ function main() {
       if (!isReadOnly(name) || kind === 'execute') {
         const allow = await new Promise(resolve => {
           approvals.set(id, resolve);
-          send({ type: 'permission', id, toolCall });
+          const projectWrite = ['write_file', 'append_to_file', 'replace_in_file', 'create_directory', 'write_files', 'patch_file'].includes(name);
+          send({ type: 'permission', id, toolCall, projectWrite });
         });
         if (!allow || stopping) {
           update({ sessionUpdate: 'tool_call_update', toolCallId: id, status: 'failed', content: [content('Declined; tool was not executed.')] });
@@ -96,7 +98,7 @@ function main() {
       if (await agent.browser.adapter.isReady()) return;
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
-    throw new Error('Browser input is not ready. Log in in the browser and start a new chat.');
+    throw Object.assign(new Error('Browser input is not ready. Log in in the browser, then retry in this chat.'), { acpBrowserRecoverable: true });
   }
 
   async function prompt(text) {
@@ -105,19 +107,22 @@ function main() {
     try {
       if (!agent) {
         const Agent = require('./agent');
-        agent = new Agent({ executeTool: runTool });
+        agent = new Agent({ executeTool: runTool, conversationalReplies: true });
         agent.browser._waitForEnter = waitForInput;
         agent.browser._printLoginBanner = () => send({ type: 'message', text: 'Please log in in the browser window. No terminal input is needed.\n' });
-        send({ type: 'message', text: `Opening ${config.MODEL}. Log in in the browser window if prompted; this GUI profile has its own saved login.\n` });
+        send({ type: 'message', text: `Opening ${config.MODEL}. Log in in the browser window if prompted; saved login is shared with new chats after a successful reply.\n` });
         await agent.init();
-        await waitForInput();
       }
+      await waitForInput();
       const result = await agent.run(text);
       if (result) send({ type: 'message', text: String(result) });
       send({ type: 'done', stopReason: 'end_turn' });
     } catch (err) {
       if (err.acpDenied) {
         send({ type: 'message', text: 'Permission declined. The turn stopped without executing that tool.\n' });
+        send({ type: 'done', stopReason: 'end_turn' });
+      } else if (err.acpBrowserRecoverable) {
+        send({ type: 'message', text: `Browser needs attention: ${err.message}\nThe browser is staying open. Inspect the page and finish login if needed. You can retry in this chat. If your message was already sent, check its reply before retrying.\n` });
         send({ type: 'done', stopReason: 'end_turn' });
       } else send({ type: 'error', message: err.message });
     } finally { busy = false; }

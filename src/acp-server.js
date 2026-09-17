@@ -6,6 +6,7 @@ const os = require('os');
 const { randomUUID } = require('crypto');
 const { fork } = require('child_process');
 const { stopWorker, descendants, identity } = require('./acp-process');
+const { hasProjectWrites, saveProjectWrites } = require('./acp-project-permissions');
 
 class AcpServer {
   constructor(connection, options = {}) {
@@ -32,8 +33,26 @@ class AcpServer {
     if (!path.isAbsolute(cwd) || !fs.statSync(cwd).isDirectory()) throw new Error('cwd must be an existing absolute directory.');
     if (mcpServers.length) throw new Error('MCP servers are not supported.');
     const sessionId = randomUUID();
-    this.sessions.set(sessionId, { id: sessionId, cwd: fs.realpathSync(cwd), busy: false, cancelled: false, worker: null });
+    const workspace = fs.realpathSync(cwd);
+    if (this.options.sessionStateDir) {
+      fs.mkdirSync(this.options.sessionStateDir, { recursive: true, mode: 0o700 });
+      fs.writeFileSync(path.join(this.options.sessionStateDir, `${sessionId}.json`),
+        JSON.stringify({ cwd: workspace, model: this.options.model || 'doubao' }), { mode: 0o600, flag: 'wx' });
+    }
+    this.sessions.set(sessionId, { id: sessionId, cwd: workspace, busy: false, cancelled: false, worker: null });
     return { sessionId };
+  }
+
+  restoreSession(sessionId) {
+    if (!this.options.sessionStateDir || !/^[a-f0-9]{8}-(?:[a-f0-9]{4}-){3}[a-f0-9]{12}$/i.test(sessionId)) return null;
+    try {
+      const record = JSON.parse(fs.readFileSync(path.join(this.options.sessionStateDir, `${sessionId}.json`), 'utf8'));
+      if (record.model !== (this.options.model || 'doubao') || !path.isAbsolute(record.cwd) ||
+          !fs.statSync(record.cwd).isDirectory() || fs.realpathSync(record.cwd) !== record.cwd) return null;
+      const session = { id: sessionId, cwd: record.cwd, busy: false, cancelled: false, worker: null, restarted: true };
+      this.sessions.set(sessionId, session);
+      return session;
+    } catch { return null; }
   }
 
   update(session, update) {
@@ -45,17 +64,22 @@ class AcpServer {
   }
 
   async prompt({ sessionId, prompt }) {
-    const session = this.sessions.get(sessionId);
-    if (!session || this.closed) throw new Error('Unknown or closed session.');
+    if (!this.initialized || this.closed) throw new Error('The agent connection is closed or not initialized. Start a new chat in AionUi.');
+    const session = this.sessions.get(sessionId) || this.restoreSession(sessionId);
+    if (!session) throw new Error('This session belongs to an earlier agent process and cannot be restored. Start a new chat in AionUi; retrying this chat keeps the stale session ID.');
     if (session.busy) throw new Error('This session already has an active prompt.');
     if (session.cancelled) throw new Error('This session was interrupted. Start a new chat.');
-    if (this.owner && this.owner !== sessionId) throw new Error('Another conversation owns this connection’s browser. Use a new agent connection.');
+    if (this.options.sessionDir && this.owner && this.owner !== sessionId) throw new Error('Another conversation owns this connection’s explicit browser profile. Use a new agent connection.');
     if (!prompt.length || prompt.some(b => !['text', 'resource_link'].includes(b.type))) throw new Error('Only text and resource links are supported.');
     const text = prompt.map(b => b.type === 'text' ? b.text : `${b.name || 'Resource'}: ${b.uri}`).join('\n');
     if (text.trimStart().startsWith('/')) throw new Error('Terminal slash commands are not supported in ACP mode.');
-    this.owner = sessionId;
+    if (this.options.sessionDir) this.owner = sessionId;
     session.busy = true;
     try {
+      if (session.restarted) {
+        await this.message(session, 'Forge reconnected to this workspace after an agent restart. Earlier actions were not replayed. Conversation context has reset; include any details needed to continue.\n');
+        session.restarted = false;
+      }
       if (!session.worker) this.spawn(session);
       const result = await new Promise((resolve, reject) => {
         session.pending = { resolve, reject };
@@ -78,7 +102,8 @@ class AcpServer {
       cwd: session.cwd, detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
       env: { ...process.env, FORGE_ACP_MODEL: this.options.model || 'doubao',
-        FORGE_ACP_SESSION_DIR: this.options.sessionDir || path.join(os.homedir(), '.deepseek-agent', 'acp-session'),
+        FORGE_ACP_SESSION_DIR: this.options.sessionDir || path.join(os.homedir(), '.deepseek-agent', 'acp-profiles', this.options.model || 'doubao', session.id),
+        FORGE_ACP_AUTH_FILE: this.options.sessionDir ? '' : path.join(os.homedir(), '.deepseek-agent', 'acp-auth', `${this.options.model || 'doubao'}.json`),
         FORGE_ACP_WORKSPACE: session.cwd },
     });
     session.worker = worker;
@@ -111,15 +136,28 @@ class AcpServer {
     if (event.type === 'update') await this.update(session, event.update);
     else if (event.type === 'message') await this.message(session, event.text);
     else if (event.type === 'permission') {
+      const directory = this.options.permissionStateDir || path.join(os.homedir(), '.deepseek-agent', 'acp-permissions');
+      const projectWrite = event.projectWrite === true;
+      if (projectWrite && (session.allowFileWrites || hasProjectWrites(directory, session.cwd))) {
+        if (session.worker?.connected) session.worker.send({ type: 'permission', id: event.id, allow: true });
+        return;
+      }
       // Do not block the event queue on UI input: cancellation must remain responsive.
       this.connection.requestPermission({
         sessionId: session.id, toolCall: event.toolCall,
         options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
+          ...(projectWrite ? [
+            { optionId: 'project-chat', name: 'Allow project file writes for this chat', kind: 'allow_always' },
+            { optionId: 'project-always', name: 'Allow always: file writes in this project', kind: 'allow_always' },
+          ] : []),
           { optionId: 'deny', name: 'Decline', kind: 'reject_once' }],
       }).then(reply => {
         if (session.cancelled || this.closed || !session.worker?.connected) return;
+        const selected = reply.outcome?.outcome === 'selected' ? reply.outcome.optionId : null;
+        if (projectWrite && selected === 'project-always') saveProjectWrites(directory, session.cwd);
+        if (projectWrite && ['project-chat', 'project-always'].includes(selected)) session.allowFileWrites = true;
         session.worker.send({ type: 'permission', id: event.id,
-          allow: reply.outcome?.outcome === 'selected' && reply.outcome.optionId === 'allow' });
+          allow: selected === 'allow' || (projectWrite && ['project-chat', 'project-always'].includes(selected)) });
       }).catch(() => {
         if (!session.cancelled && session.worker?.connected) session.worker.send({ type: 'permission', id: event.id, allow: false });
       });

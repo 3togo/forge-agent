@@ -33,7 +33,6 @@ class DoubaoAdapter extends BaseAdapter {
         '[class*="stop-btn"]',
         '[class*="stopBtn"]',
         '[class*="stop-gen"]',
-        '[class*="generating"]',
       ],
       newChat: [
         'text=新对话',
@@ -79,21 +78,23 @@ class DoubaoAdapter extends BaseAdapter {
         workingDir    : this.config.WORKING_DIR     || process.cwd(),
       });
       fullText = systemPrompt + '\n\n════════════════════════════════\nUSER TASK:\n' + text;
-      this._isFirstMessage = false;
     }
 
     const input = await this._prepareInput(fullText);
     if (!input) {
-      throw new Error(
+      throw Object.assign(new Error(
         `Failed to send message to Doubao.\n` +
         `The composer did not become ready. The UI may have changed.\n` +
-        `Run: forge-agent --test-model\nOr try: forge-agent --calibrate`
-      );
+        `Detail: ${this._inputFailure || 'No editable composer found'}\n` +
+        `Log in in the Doubao browser window if prompted, then retry.\n` +
+        `Run: forge-agent --model=doubao --test-model`
+      ), { acpBrowserRecoverable: true });
     }
 
     this._lastTextBefore = await this._getLastAssistantText() || '';
 
     await input.press('Enter');
+    this._isFirstMessage = false;
 
     await this.page.waitForTimeout(500);
   }
@@ -135,12 +136,12 @@ class DoubaoAdapter extends BaseAdapter {
       return this._cleanText(final);
     }
 
-    throw new Error(
+    throw Object.assign(new Error(
       `No response received from Doubao after ${timeoutMs / 1000}s.\n` +
       `The AI may still be processing. Try:\n` +
       `  - Increasing timeout: forge-agent --timeout=600 "task"\n` +
       `  - Testing the model: forge-agent --test-model`
-    );
+    ), { acpBrowserRecoverable: true });
   }
 
   // ── Override: newChat ───────────────────────────────────────────────────────
@@ -180,32 +181,16 @@ class DoubaoAdapter extends BaseAdapter {
         '[class*="stop-btn"]',
         '[class*="stopBtn"]',
         '[class*="stop-gen"]',
-        '[class*="generating"]',
       ];
       for (const sel of stopSelectors) {
-        const el = document.querySelector(sel);
-        if (el) {
+        for (const el of document.querySelectorAll(sel)) {
           const s = window.getComputedStyle(el);
-          if (s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0') return true;
+          if (el.getClientRects().length > 0 && s.display !== 'none' && s.visibility !== 'hidden' && s.opacity !== '0') return true;
         }
       }
 
-      const loaderSelectors = [
-        '[class*="typing"]',
-        '[class*="loading"]',
-        '[class*="spinner"]',
-        '[class*="blink"]',
-        '[class*="cursor"]',
-        '[class*="pulsing"]',
-      ];
-      for (const sel of loaderSelectors) {
-        const el = document.querySelector(sel);
-        if (el) {
-          const s = window.getComputedStyle(el);
-          if (s.display !== 'none' && s.visibility !== 'hidden') return true;
-        }
-      }
-
+      // Generic cursor/loading classes also occur in the composer and sidebar.
+      // Only an explicit visible stop control indicates ongoing generation.
       return false;
     });
   }
@@ -231,40 +216,87 @@ class DoubaoAdapter extends BaseAdapter {
    * instead of click()+type(), and verify the text was correctly written
    * before allowing Enter to be pressed.
    */
+  async _findComposer() {
+    // Try selectors in priority order; a CSS union sorts matches by DOM order.
+    for (const selector of ['.ProseMirror[contenteditable="true"]', ...this.selectors.chatInput]) {
+      const candidates = this.page.locator(`${selector}:visible:is(textarea, input, [contenteditable="true"]):not([disabled]):not([readonly])`);
+      const count = await candidates.count();
+      for (let i = 0; i < count; i++) {
+        const candidate = candidates.nth(i);
+        if (await candidate.isEditable()) return candidate;
+      }
+    }
+    return null;
+  }
+
+  async isReady() {
+    return Boolean(await this._findComposer());
+  }
+
   async _prepareInput(text, timeout = 30_000) {
+    this._inputFailure = null;
     const deadline = Date.now() + timeout;
-    const selector = this.selectors.chatInput.map(s => `${s}:visible`).join(', ');
 
     while (Date.now() < deadline) {
       if (this.page.isClosed?.()) {
         throw new Error('Doubao chat tab was closed before sending');
       }
 
-      const composer = this.page.locator(selector).first;
       try {
+        const composer = await this._findComposer();
+        if (!composer) {
+          this._inputFailure = 'No visible, editable Doubao composer found';
+          await this.page.waitForTimeout(200);
+          continue;
+        }
         const remaining = Math.max(1000, deadline - Date.now());
-        await composer.fill(text, { timeout: Math.min(2000, remaining) });
+        let fillError;
+        try {
+          await composer.fill(text, { timeout: Math.min(15000, remaining) });
+        } catch (err) {
+          // A large Tiptap insert can finish even though Playwright times out.
+          // Verify before retrying so an accepted prompt is not inserted again.
+          fillError = err;
+        }
         await this.page.waitForTimeout(300);
 
-        const current = this.page.locator(selector).first;
+        const current = composer;
         const value = await current.evaluate(el => {
           if ('value' in el) return el.value;
-          if (!el.classList.contains('ProseMirror')) return el.innerText;
+          if (!el.isContentEditable) return el.innerText;
           const read = n =>
             n.nodeType === Node.TEXT_NODE ? n.textContent :
-            n.nodeName === 'BR' ? (n.classList.contains('ProseMirror-trailingBreak') ? '' : '\n') :
+            n.nodeName === 'BR' ? (
+              n.classList.contains('ProseMirror-trailingBreak') ||
+              (n.parentNode.childNodes.length === 1 && /^(DIV|P)$/.test(n.parentNode.nodeName)) ? '' : '\n'
+            ) :
             [...n.childNodes].map(read).join('');
           return [...el.childNodes].map(read).join('\n');
         }, { timeout: 1000 });
 
-        if (value.replace('\r\n', '\n') === text.replace('\r\n', '\n')) {
+        // Chromium preserves repeated spaces using non-breaking spaces in editable HTML.
+        const normalize = value => value.replace(/\r\n/g, '\n').replace(/\u00a0/g, ' ');
+        if (normalize(value) === normalize(text)) {
           return current;
         }
-      } catch {}
+        this._inputFailure = fillError ? String(fillError.message).split('\n')[0] :
+          `Composer text verification failed (expected ${text.length} characters, read ${value.length})`;
+      } catch (err) {
+        this._inputFailure = String(err.message).split('\n')[0];
+      }
 
       await this.page.waitForTimeout(100);
     }
 
+    try {
+      const status = await this.page.evaluate(() => ({
+        title: document.title,
+        path: location.pathname,
+        editors: document.querySelectorAll('textarea, [contenteditable="true"]').length,
+        dialogs: document.querySelectorAll('[role="dialog"]').length,
+      }));
+      this._inputFailure += `; page=${status.title}, path=${status.path}, editors=${status.editors}, dialogs=${status.dialogs}`;
+    } catch {}
     return null;
   }
 
@@ -325,16 +357,22 @@ class DoubaoAdapter extends BaseAdapter {
         return result.trim();
       }
 
-      const container = document.querySelector('.list_items');
-      if (!container) return null;
-
-      const rows = container.querySelectorAll('.v_list_row');
-      if (!rows || rows.length < 1) return null;
+      const visible = el => {
+        const style = getComputedStyle(el);
+        return el.getClientRects().length > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const inEditor = el => el.closest('[contenteditable="true"], textarea');
+      // Prefer explicitly identified assistant messages when available.
+      let rows = [...document.querySelectorAll('[data-message-role="assistant"], [data-role="assistant"], [data-testid*="assistant-message"]')].filter(visible);
+      if (!rows.length) rows = [...document.querySelectorAll('.list_items .v_list_row')].filter(visible);
+      if (!rows.length) rows = [...document.querySelectorAll('.flow-markdown-body, .markdown-body, [class*="message-content"], [class*="reply"]')]
+        .filter(el => visible(el) && !inEditor(el) && !el.closest('[data-message-role="user"], [data-role="user"]'));
+      if (!rows.length) return null;
 
       let lastRow = null;
       for (let i = rows.length - 1; i >= 0; i--) {
         const text = rows[i].textContent?.trim();
-        if (text && text.length > 5) {
+        if (text && !rows[i].closest('[data-message-role="user"], [data-role="user"]')) {
           lastRow = rows[i];
           break;
         }
