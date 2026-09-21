@@ -3,6 +3,7 @@
 
 const BaseAdapter = require('./base-adapter');
 const logger      = require('../logger');
+const { Errors }  = require('../errors');
 const { withSendRetry, withResponseRetry } = require('../retry');
 const { ThinkingTracker, formatThinkingForLog } = require('../thinking');
 
@@ -105,13 +106,15 @@ class DoubaoAdapter extends BaseAdapter {
 
       const input = await this._prepareInput(fullText);
       if (!input) {
-        throw Object.assign(new Error(
-          `Failed to send message to Doubao.\n` +
-          `The composer did not become ready. The UI may have changed.\n` +
-          `Detail: ${this._inputFailure || 'No editable composer found'}\n` +
-          `Log in in the Doubao browser window if prompted, then retry.\n` +
-          `Run: forge-agent --model=doubao --test-model`
-        ), { acpBrowserRecoverable: true, retryable: false });
+        throw Object.assign(Errors.inputNotFound(), {
+          acpBrowserRecoverable: true,
+          retryable: false,
+          message: `Failed to send message to Doubao.\n` +
+            `The composer did not become ready. The UI may have changed.\n` +
+            `Detail: ${this._inputFailure || 'No editable composer found'}\n` +
+            `Log in in the Doubao browser window if prompted, then retry.\n` +
+            `Run: forge-agent --model=doubao --test-model`,
+        });
       }
 
       this._lastTextBefore = await this._getLastAssistantText() || '';
@@ -162,10 +165,12 @@ class DoubaoAdapter extends BaseAdapter {
       // ── Phase 1: wait for content to change from baseline ────────────────
       let appeared = false;
       const appearTimeout = this.config.APPEAR_TIMEOUT || 120_000;
+      const initialCount = await this._getMessageCount();
 
       while (Date.now() - start < appearTimeout) {
         const current = await this._getLastAssistantText();
-        if (current && current.trim() !== this._lastTextBefore.trim()) {
+        const count = await this._getMessageCount();
+        if ((current && current.trim() !== this._lastTextBefore.trim()) || count > initialCount) {
           appeared = true;
           break;
         }
@@ -225,12 +230,7 @@ class DoubaoAdapter extends BaseAdapter {
 
       const final = await this._getLastAssistantText();
       if (!final || final.trim() === this._lastTextBefore.trim()) {
-        const err = new Error(
-          `No response received from Doubao after ${timeout / 1000}s.\n` +
-          `The AI may still be processing. Try:\n` +
-          `  - Increasing timeout: forge-agent --timeout=600 "task"\n` +
-          `  - Testing the model: forge-agent --test-model`
-        );
+        const err = Errors.responseTimeout(timeout);
         err.retryable = true;
         throw err;
       }
@@ -238,7 +238,7 @@ class DoubaoAdapter extends BaseAdapter {
       const cleaned = this._cleanText(final);
 
       if (!cleaned || cleaned.trim().length === 0) {
-        const err = new Error('Empty response from Doubao');
+        const err = Errors.emptyResponse();
         err.retryable = true;
         throw err;
       }
@@ -333,10 +333,12 @@ class DoubaoAdapter extends BaseAdapter {
     if (!text) return '';
     return text
       .replace(/<think>[\s\S]*?<\/think>\n?/gi, '')
+      .replace(/^Thinking\.{0,3}\n[\s\S]*?\n\n/m, '')
       .replace(/^(Assistant|AI|Doubao|豆包):\s*/i, '')
       .replace(/^\d+(?:Copy|Run|Insert|Edit)\w*.*$/gm, '')
       .replace(/Copy code[\s\S]{0,50}$/gm, '')
       .replace(/下载豆包电脑版[^\n]*/g, '')
+      .replace(/\d+ \/ \d+[\s\n]*$/g, '')
       .replace(/\n{3,}/g, '\n\n')
       .trim();
   }
@@ -362,7 +364,35 @@ class DoubaoAdapter extends BaseAdapter {
   }
 
   async isReady() {
+    await this._dismissOverlays();
     return Boolean(await this._findComposer());
+  }
+
+  async _dismissOverlays() {
+    const overlaySelectors = [
+      '[role="dialog"]',
+      '.semi-modal-content',
+      '[class*="modal-overlay"]',
+      '[class*="popup"]',
+      'button:has-text("知道了")',
+      'button:has-text("关闭")',
+      'button:has-text("不再提示")',
+      'button:has-text("取消")',
+    ];
+
+    for (const sel of overlaySelectors) {
+      try {
+        const el = await this.page.$(sel);
+        if (el && await el.isVisible()) {
+          if (sel.includes('button')) {
+            await el.click();
+          } else {
+            await this.page.keyboard.press('Escape');
+          }
+          await this.page.waitForTimeout(300);
+        }
+      } catch {}
+    }
   }
 
   async _prepareInput(text, timeout = 30_000) {
@@ -387,6 +417,17 @@ class DoubaoAdapter extends BaseAdapter {
           await composer.fill(text, { timeout: Math.min(15000, remaining) });
         } catch (err) {
           fillError = err;
+          try {
+            await composer.click({ timeout: 2000 });
+            await this.page.keyboard.press('Control+a');
+            await this.page.waitForTimeout(100);
+            await this.page.keyboard.press('Backspace');
+            await this.page.waitForTimeout(100);
+            await composer.type(text, { delay: 0 });
+            await this.page.waitForTimeout(300);
+          } catch (kbErr) {
+            fillError = kbErr;
+          }
         }
         await this.page.waitForTimeout(300);
 
@@ -456,6 +497,48 @@ class DoubaoAdapter extends BaseAdapter {
    * Also reconstructs code blocks from [data-streaming] pre code elements,
    * matching the format expected by Forge's parser.
    */
+  async _getMessageCount() {
+    return await this.page.evaluate(() => {
+      const candidates = [
+        '[data-message-role="assistant"]',
+        '[data-role="assistant"]',
+        '[data-testid*="assistant-message"]',
+        '.list_items .v_list_row',
+      ];
+      for (const sel of candidates) {
+        const els = document.querySelectorAll(sel);
+        if (els.length > 0) return els.length;
+      }
+      return document.querySelectorAll('[class*="message"]').length;
+    });
+  }
+
+  async testSelectors() {
+    const results = await super.testSelectors();
+
+    results.proseMirror = false;
+    results.chineseUI = false;
+    results.errors = results.errors || [];
+
+    try {
+      const pm = await this.page.$('.ProseMirror[contenteditable="true"]');
+      results.proseMirror = !!pm;
+      if (!pm) results.errors.push('ProseMirror editor not found');
+    } catch (e) {
+      results.errors.push('ProseMirror check error: ' + e.message);
+    }
+
+    try {
+      const newChat = await this.page.$('text=新对话');
+      results.chineseUI = !!newChat;
+    } catch {
+      results.chineseUI = false;
+    }
+
+    results.ready = results.ready || results.proseMirror;
+    return results;
+  }
+
   async _getLastAssistantText() {
     return await this.page.evaluate(() => {
       function getFullText(el) {
