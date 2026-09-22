@@ -56,6 +56,7 @@ const mockAdapter = {
   sendMessage: jest.fn(),
   waitForResponse: jest.fn().mockResolvedValue('response'),
   newChat: jest.fn(),
+  isReady: jest.fn().mockResolvedValue(true),
 };
 
 jest.mock('../src/adapter-factory', () => ({
@@ -65,6 +66,9 @@ jest.mock('../src/adapter-factory', () => ({
 
 // Mock health check so launch() doesn't need complex evaluate setup
 jest.mock('../src/health', () => ({
+  runHealthCheck: jest.fn().mockResolvedValue({
+    checks: [], passed: 6, warned: 0, failed: 0, healthy: true,
+  }),
   runHealthCheckWithReAuth: jest.fn().mockResolvedValue({
     checks: [], passed: 6, warned: 0, failed: 0, healthy: true,
   }),
@@ -107,6 +111,7 @@ beforeEach(() => {
   mockAdapter.sendMessage.mockResolvedValue(undefined);
   mockAdapter.waitForResponse.mockResolvedValue('response');
   mockAdapter.newChat.mockResolvedValue(undefined);
+  mockAdapter.isReady.mockResolvedValue(true);
 
   // Default: page is at deepseek, logged in
   mockPage.evaluate.mockResolvedValue(false);
@@ -115,6 +120,9 @@ beforeEach(() => {
   getAdapter.mockReturnValue(mockAdapter);
   getModelUrl.mockReturnValue('https://chat.deepseek.com');
 
+  require('../src/health').runHealthCheck.mockResolvedValue({
+    checks: [], passed: 6, warned: 0, failed: 0, healthy: true,
+  });
   require('../src/health').runHealthCheckWithReAuth.mockResolvedValue({
     checks: [], passed: 6, warned: 0, failed: 0, healthy: true,
   });
@@ -201,17 +209,22 @@ describe('close()', () => {
 //  Health check wiring
 // ─────────────────────────────────────────────────────────
 
-describe('Health check wiring', () => {
-  test('launch() calls runHealthCheckWithReAuth', async () => {
-    const { runHealthCheckWithReAuth } = require('../src/health');
+describe('Login check wiring', () => {
+  test('launch() checks adapter.isReady and skips login when ready', async () => {
     const browser = new DeepSeekBrowser();
+    mockAdapter.isReady.mockResolvedValueOnce(true);
     await browser.launch();
-    expect(runHealthCheckWithReAuth).toHaveBeenCalledWith(
-      mockPage,
-      expect.anything(),
-      expect.anything(),
-      expect.any(Function)
-    );
+    expect(mockAdapter.isReady).toHaveBeenCalled();
+  });
+
+  test('launch() attempts QR login when adapter not ready', async () => {
+    const browser = new DeepSeekBrowser();
+    mockAdapter.isReady.mockResolvedValueOnce(false);
+    mockPage.$.mockResolvedValue(null);
+    browser._waitForEnter = jest.fn().mockResolvedValue(undefined);
+    await browser.launch();
+    expect(mockAdapter.isReady).toHaveBeenCalled();
+    expect(browser._waitForEnter).toHaveBeenCalled();
   });
 });
 

@@ -7,7 +7,7 @@ const config       = require('./config');
 const logger       = require('./logger');
 const { Errors }   = require('./errors');
 const { getAdapter, getModelUrl } = require('./adapter-factory');
-const { runHealthCheckWithReAuth } = require('./health');
+const { runHealthCheck } = require('./health');
 
 // ─────────────────────────────────────────────────────────────────────────────
 //  DeepSeekBrowser class
@@ -65,13 +65,7 @@ class DeepSeekBrowser {
 
     await this._navigate(getModelUrl(config.MODEL));
 
-    await runHealthCheckWithReAuth(this.page, this.adapter, config, async () => {
-      const qrLogin = await this._tryQrLogin();
-      if (!qrLogin) {
-        this._printLoginBanner();
-        await this._waitForEnter();
-      }
-    });
+    await this._checkLoginAndAttemptQr();
 
     logger.success('Browser ready!');
   }
@@ -99,6 +93,25 @@ class DeepSeekBrowser {
   }
 
   // ── Login handling ─────────────────────────────────────────────────────────
+
+  async _checkLoginAndAttemptQr() {
+    await this.page.waitForTimeout(2000);
+
+    const ready = await this.adapter.isReady();
+    if (ready) {
+      logger.dim('Page is ready — no login needed');
+      return;
+    }
+
+    logger.info('Login required — attempting QR code login...');
+
+    const qrLogin = await this._tryQrLogin();
+    if (qrLogin) return;
+
+    logger.dim('QR login not available — falling back to manual login');
+    this._printLoginBanner();
+    await this._waitForEnter();
+  }
 
   async _tryQrLogin() {
     try {

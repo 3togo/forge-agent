@@ -79,21 +79,31 @@ class QrLoginManager {
   }
 
   async tryQrLogin(onQrReady) {
-    await this._clickQrTab();
-    await this.page.waitForTimeout(2000);
+    for (let attempt = 0; attempt < 3; attempt++) {
+      if (attempt > 0) {
+        logger.dim(`QR login retry ${attempt + 1}/3...`);
+        await this.page.waitForTimeout(3000);
+      }
 
-    const qrElement = await this._detectQrElement();
-    if (!qrElement) {
-      logger.dim('No QR code element found on login page');
-      return false;
+      await this._clickQrTab();
+      await this.page.waitForTimeout(2000);
+
+      const qrElement = await this._detectQrElement();
+      if (!qrElement) {
+        logger.dim(`No QR code element found (attempt ${attempt + 1}/3)`);
+        continue;
+      }
+
+      const displayed = await this._displayQrCode(qrElement, onQrReady);
+      if (!displayed) continue;
+
+      const loggedIn = await this._waitForLoginWithRefresh(qrElement, onQrReady);
+      this._cleanup();
+      return loggedIn;
     }
 
-    const displayed = await this._displayQrCode(qrElement, onQrReady);
-    if (!displayed) return false;
-
-    const loggedIn = await this._waitForLoginWithRefresh(qrElement, onQrReady);
-    this._cleanup();
-    return loggedIn;
+    logger.dim('No QR code element found after 3 attempts');
+    return false;
   }
 
   async _clickQrTab() {
@@ -103,26 +113,68 @@ class QrLoginManager {
         if (element && await element.isVisible()) {
           await element.click();
           await this.page.waitForTimeout(1000);
-          logger.dim('Clicked QR login tab');
+          logger.dim(`Clicked QR login tab: ${selector}`);
           return;
         }
       } catch {}
     }
+    logger.dim('No QR login tab found');
   }
 
   async _detectQrElement() {
     for (const selector of QR_SELECTORS) {
       try {
         const element = await this.page.$(selector);
-        if (element && await element.isVisible()) {
+        if (element) {
+          const visible = await element.isVisible();
           const box = await element.boundingBox();
-          if (box && box.width > 50 && box.height > 50) {
+          if (visible && box && box.width > 50 && box.height > 50) {
             logger.dim(`Found QR code element: ${selector} (${Math.round(box.width)}x${Math.round(box.height)})`);
             return element;
           }
         }
       } catch {}
     }
+
+    try {
+      const diag = await this.page.evaluate(() => {
+        const imgs = Array.from(document.querySelectorAll('img')).slice(0, 20);
+        const canvases = Array.from(document.querySelectorAll('canvas')).slice(0, 10);
+        return {
+          url: location.href,
+          title: document.title,
+          imgs: imgs.map(img => ({
+            src: (img.src || '').slice(0, 80),
+            class: (img.className || '').slice(0, 80),
+            alt: img.alt || '',
+            width: img.offsetWidth,
+            height: img.offsetHeight,
+            visible: img.offsetParent !== null,
+          })),
+          canvases: canvases.map(c => ({
+            class: (c.className || '').slice(0, 80),
+            width: c.offsetWidth,
+            height: c.offsetHeight,
+          })),
+          loginText: !!document.querySelector('[class*="login"], [class*="signin"], [class*="auth"]'),
+        };
+      });
+      logger.dim(`Page: ${diag.url} | title: ${diag.title} | login elements: ${diag.loginText}`);
+      logger.dim(`Images: ${diag.imgs.length}, Canvases: ${diag.canvases.length}`);
+      for (const img of diag.imgs) {
+        if (img.width > 50 && img.height > 50) {
+          logger.dim(`  img: class="${img.class}" alt="${img.alt}" ${img.width}x${img.height} visible=${img.visible}`);
+        }
+      }
+      for (const c of diag.canvases) {
+        if (c.width > 50 && c.height > 50) {
+          logger.dim(`  canvas: class="${c.class}" ${c.width}x${c.height}`);
+        }
+      }
+    } catch (err) {
+      logger.dim(`Diagnostic eval failed: ${err.message}`);
+    }
+
     return null;
   }
 
