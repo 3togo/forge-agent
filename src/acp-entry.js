@@ -4,7 +4,7 @@
 async function main(args = process.argv.slice(2)) {
   if (Number(process.versions.node.split('.')[0]) < 18) throw new Error('Forge ACP needs Node.js 18 or newer. Install a supported Node.js version and npm, then retry.');
   if (process.platform !== 'linux') throw new Error('Forge ACP currently supports Linux only.');
-  const options = { model: 'doubao', sessionStateDir: require('path').join(require('os').homedir(), '.deepseek-agent', 'acp-sessions') };
+  const options = { model: 'deepseek', sessionStateDir: require('path').join(require('os').homedir(), '.deepseek-agent', 'acp-sessions') };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--acp') continue;
@@ -26,13 +26,13 @@ async function main(args = process.argv.slice(2)) {
   if (options.sessionDir && !require('path').isAbsolute(options.sessionDir)) throw new Error('--session-dir must be absolute.');
   if (options.register) {
     const reg = require('./aionui-register');
-    const models = options.model && options.model !== 'doubao' ? [options.model] : reg.SUPPORTED_MODELS || require('./adapter-factory').SUPPORTED_MODELS;
+    const models = options.model && options.model !== 'deepseek' ? [options.model] : reg.SUPPORTED_MODELS || require('./adapter-factory').SUPPORTED_MODELS;
     await reg.register({ models, api: options.api });
     return;
   }
   if (options.unregister) {
     const reg = require('./aionui-register');
-    const models = options.model && options.model !== 'doubao' ? [options.model] : require('./adapter-factory').SUPPORTED_MODELS;
+    const models = options.model && options.model !== 'deepseek' ? [options.model] : require('./adapter-factory').SUPPORTED_MODELS;
     await reg.unregister({ models });
     return;
   }
