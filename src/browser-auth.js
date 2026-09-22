@@ -36,4 +36,28 @@ async function saveAuth(context, file, modelUrl) {
     fs.renameSync(temp, file);
   } finally { try { fs.unlinkSync(temp); } catch (err) { if (err.code !== 'ENOENT') throw err; } }
 }
-module.exports = { scopedState, restoreAuth, saveAuth };
+function isAuthValid(file) {
+  if (!file || !fs.existsSync(file)) return false;
+  try {
+    const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+    const hasCookies = Array.isArray(state.cookies) && state.cookies.length > 0;
+    const hasOrigins = Array.isArray(state.origins) && state.origins.some(o => o.localStorage?.length > 0);
+    if (!hasCookies && !hasOrigins) return false;
+    const hasValidCookie = (state.cookies || []).some(c => c.expires === -1 || c.expires > Date.now() / 1000);
+    return hasValidCookie || hasOrigins;
+  } catch {
+    return false;
+  }
+}
+
+function getAuthAge(file) {
+  if (!file || !fs.existsSync(file)) return Infinity;
+  try {
+    const stats = fs.statSync(file);
+    return Date.now() - stats.mtimeMs;
+  } catch {
+    return Infinity;
+  }
+}
+
+module.exports = { scopedState, restoreAuth, saveAuth, isAuthValid, getAuthAge };

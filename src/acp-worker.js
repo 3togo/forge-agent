@@ -94,8 +94,30 @@ function main() {
 
   async function waitForInput() {
     const until = Date.now() + 180000;
+    let qrAttempted = false;
     while (!stopping && Date.now() < until) {
       if (await agent.browser.adapter.isReady()) return;
+      if (!qrAttempted) {
+        qrAttempted = true;
+        try {
+          const { QrLoginManager } = require('./qr-login');
+          const qrLogin = new QrLoginManager(agent.browser.page, config.MODEL);
+          send({ type: 'message', text: 'Attempting QR code login...\n' });
+          const loggedIn = await qrLogin.tryQrLogin(({ imagePath, qrUrl }) => {
+            const msg = qrUrl
+              ? `QR code displayed in terminal. Scan it with your phone to log in.\n`
+              : `QR code image saved: ${imagePath}\nOpen it and scan with your phone to log in.\n`;
+            send({ type: 'message', text: msg });
+          });
+          if (loggedIn) {
+            send({ type: 'message', text: 'QR login successful!\n' });
+            return;
+          }
+          send({ type: 'message', text: 'QR login not available. Please log in manually in the browser window.\n' });
+        } catch (err) {
+          send({ type: 'message', text: `QR login failed: ${err.message}\n` });
+        }
+      }
       await new Promise(resolve => setTimeout(resolve, 1000));
     }
     throw Object.assign(new Error('Browser input is not ready. Log in in the browser, then retry in this chat.'), { acpBrowserRecoverable: true });

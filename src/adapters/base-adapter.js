@@ -33,6 +33,12 @@ class BaseAdapter {
     this._projectContext = context || '';
   }
 
+  // ── QR Login Methods (subclasses may override) ─────────────────────────────
+
+  getQrLoginSelectors() { return []; }
+  getQrTabSelectors() { return []; }
+  async isLoginSuccess() { return await this.isReady(); }
+
   // ── Concrete Methods (subclasses may override) ─────────────────────────────
 
   /**

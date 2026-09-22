@@ -65,10 +65,12 @@ class DeepSeekBrowser {
 
     await this._navigate(getModelUrl(config.MODEL));
 
-    // Run full session health check — handles login re-auth automatically
     await runHealthCheckWithReAuth(this.page, this.adapter, config, async () => {
-      this._printLoginBanner();
-      await this._waitForEnter();
+      const qrLogin = await this._tryQrLogin();
+      if (!qrLogin) {
+        this._printLoginBanner();
+        await this._waitForEnter();
+      }
     });
 
     logger.success('Browser ready!');
@@ -97,6 +99,26 @@ class DeepSeekBrowser {
   }
 
   // ── Login handling ─────────────────────────────────────────────────────────
+
+  async _tryQrLogin() {
+    try {
+      const { QrLoginManager } = require('./qr-login');
+      const qrLogin = new QrLoginManager(this.page, config.MODEL);
+      logger.info('Attempting QR code login...');
+      const result = await qrLogin.tryQrLogin();
+      if (result) {
+        logger.success('QR login successful!');
+        if (config.ACP_AUTH_FILE) {
+          try { await require('./browser-auth').saveAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
+          catch (err) { logger.warn(`Could not save login: ${err.message}`); }
+        }
+      }
+      return result;
+    } catch (err) {
+      logger.dim(`QR login attempt failed: ${err.message}`);
+      return false;
+    }
+  }
 
   _printLoginBanner() {
     console.log('');

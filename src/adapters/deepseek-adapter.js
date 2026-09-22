@@ -237,6 +237,40 @@ class DeepSeekAdapter extends BaseAdapter {
   _getResponseSelectors() { return this.selectors.messageContainer; }
   getModelUrl() { return this.config.DEEPSEEK_URL || 'https://chat.deepseek.com'; }
 
+  getQrTabSelectors() {
+    return [
+      'text=扫码登录',
+      'text=二维码登录',
+      '[class*="qr-tab"]',
+      '[class*="scan-tab"]',
+      '[class*="qr-login-tab"]',
+      'div[class*="tab"]:has-text("扫码")',
+    ];
+  }
+
+  getQrLoginSelectors() {
+    return [
+      'img[class*="qr"]',
+      '[class*="qrcode"] img',
+      '[class*="qr-code"] img',
+      '[class*="qr_container"] img',
+      'canvas[class*="qr"]',
+      'img[alt*="qr"]',
+      'img[alt*="二维码"]',
+      '[class*="login-qr"] img',
+    ];
+  }
+
+  async isLoginSuccess() {
+    for (const sel of this.selectors.chatInput) {
+      try {
+        const el = await this.page.$(sel);
+        if (el && await el.isVisible()) return true;
+      } catch {}
+    }
+    return false;
+  }
+
   async _findInput() {
     for (const sel of this.selectors.chatInput) {
       try {

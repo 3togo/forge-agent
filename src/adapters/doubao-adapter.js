@@ -82,6 +82,34 @@ class DoubaoAdapter extends BaseAdapter {
   _getResponseSelectors(){ return this.selectors.messageContainer; }
   getModelUrl()         { return DOUBAO_URL; }
 
+  getQrTabSelectors() {
+    return [
+      'text=扫码登录',
+      'text=二维码登录',
+      '[class*="qr-tab"]',
+      '[class*="scan-tab"]',
+      '[class*="qr-login-tab"]',
+      'div[class*="tab"]:has-text("扫码")',
+    ];
+  }
+
+  getQrLoginSelectors() {
+    return [
+      'img[class*="qr"]',
+      '[class*="qrcode"] img',
+      '[class*="qr-code"] img',
+      'canvas[class*="qr"]',
+      'img[alt*="qr"]',
+      'img[alt*="二维码"]',
+      '[class*="login-qr"] img',
+      '[class*="scan-code"] img',
+    ];
+  }
+
+  async isLoginSuccess() {
+    return Boolean(await this._findComposer());
+  }
+
   // ── Override: sendMessage ───────────────────────────────────────────────────
   //
   // Doubao uses a ProseMirror contenteditable editor. The base class _typeText

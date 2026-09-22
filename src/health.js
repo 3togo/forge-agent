@@ -99,8 +99,11 @@ async function runHealthCheck(page, adapter, config, options = {}) {
 async function runHealthCheckWithReAuth(page, adapter, config, reLogin) {
   const report = await runHealthCheck(page, adapter, config);
 
-  const loginCheck = report.checks.find(c => c.name === 'Logged in');
-  if (loginCheck && loginCheck.status === STATUS.FAIL) {
+  const inputCheck = report.checks.find(c => c.name === 'Input box');
+  const needsLogin = inputCheck && inputCheck.status === STATUS.WARN;
+
+  if (needsLogin) {
+    logger.dim('Input not visible — attempting login...');
     await reLogin();
     await page.waitForTimeout(3000);
     return await runHealthCheck(page, adapter, config);
