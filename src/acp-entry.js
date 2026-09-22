@@ -9,17 +9,38 @@ async function main(args = process.argv.slice(2)) {
     const arg = args[i];
     if (arg === '--acp') continue;
     if (arg === '--setup') { options.setup = true; continue; }
+    if (arg === '--register') { options.register = true; continue; }
+    if (arg === '--unregister') { options.unregister = true; continue; }
+    if (arg === '--list-agents') { options.listAgents = true; continue; }
+    if (arg === '--api') { options.api = true; continue; }
     if (arg === '--model' || arg === '-m') options.model = args[++i];
     else if (arg.startsWith('--model=')) options.model = arg.slice(8);
     else if (arg === '--session-dir') options.sessionDir = args[++i];
     else if (arg === '--help') {
-      process.stderr.write('Usage: forge-agent-acp [--model doubao|deepseek|gemini] [--session-dir /absolute/profile] [--setup]\n');
+      process.stderr.write('Usage: forge-agent-acp [--model doubao|deepseek|gemini] [--session-dir /absolute/profile] [--setup] [--register] [--unregister] [--list-agents] [--api]\n');
       return;
     } else throw new Error(`Unknown ACP option: ${arg}`);
   }
   options.model = options.model?.toLowerCase();
   if (!require('./adapter-factory').SUPPORTED_MODELS.includes(options.model)) throw new Error('Unsupported model. Use doubao, deepseek, or gemini.');
   if (options.sessionDir && !require('path').isAbsolute(options.sessionDir)) throw new Error('--session-dir must be absolute.');
+  if (options.register) {
+    const reg = require('./aionui-register');
+    const models = options.model && options.model !== 'doubao' ? [options.model] : reg.SUPPORTED_MODELS || require('./adapter-factory').SUPPORTED_MODELS;
+    await reg.register({ models, api: options.api });
+    return;
+  }
+  if (options.unregister) {
+    const reg = require('./aionui-register');
+    const models = options.model && options.model !== 'doubao' ? [options.model] : require('./adapter-factory').SUPPORTED_MODELS;
+    await reg.unregister({ models });
+    return;
+  }
+  if (options.listAgents) {
+    require('./aionui-register').list();
+    return;
+  }
+
   await require('./aionui-setup').ensureAionUi();
   await require('./acp-setup').ensureSetup({ install: options.setup });
   if (options.setup) {

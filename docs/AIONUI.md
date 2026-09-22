@@ -7,7 +7,25 @@ with `--model=deepseek` or `--model=gemini`.
 
 ## Register in AionUi
 
-Running `./forge-agent-acp` in a desktop terminal restarts AionUi if it is installed.
+Run `./forge-agent-acp --register` to automatically register all supported models
+(DeepSeek, Gemini, Doubao) as custom ACP agents in AionUi. This writes directly
+to the AionUi database, so close AionUi first to avoid conflicts. After registering,
+restart AionUi and the agents appear in Settings → Agent Management → Custom Agents.
+
+```
+./forge-agent-acp --register              # Register all models
+./forge-agent-acp --register --model=deepseek  # Register only DeepSeek
+./forge-agent-acp --list-agents           # List registered Forge agents
+./forge-agent-acp --unregister            # Remove all Forge agents
+./forge-agent-acp --unregister --model=gemini  # Remove only Gemini
+```
+
+For API-based providers (requires API keys), use `--api`:
+```
+./forge-agent-acp --register --api        # Register as API providers
+```
+
+Manual registration is still available:
 Existing AionUi processes owned by your user receive SIGTERM; after eight seconds,
 unresponsive processes receive SIGKILL. Active chats disconnect during restart.
 Without a desktop display, the launcher leaves existing processes alone.
