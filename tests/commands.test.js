@@ -142,7 +142,7 @@ describe('Slash Command System', () => {
 
     test('/help model lists supported models without disabled ChatGPT', async () => {
       const result = await makeRouter().execute('/help model');
-      expect(result).toContain('/model <deepseek|gemini|doubao>');
+      expect(result).toContain('/model <deepseek|gemini|doubao|yuanbao>');
       expect(result).not.toContain('chatgpt');
     });
 

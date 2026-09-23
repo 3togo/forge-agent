@@ -98,12 +98,16 @@ class AcpServer {
   }
 
   spawn(session) {
+    const model = this.options.model || 'doubao';
+    const sessionDir = this.options.sessionDir || path.join(os.homedir(), '.deepseek-agent', 'acp-profiles', model, session.id);
+    const authFile = this.options.sessionDir ? '' : path.join(os.homedir(), '.deepseek-agent', 'acp-auth', `${model}.json`);
+    process.stderr.write(`[forge-acp] server: spawning worker with model=${model}, sessionDir=${sessionDir}, authFile=${authFile}, workspace=${session.cwd}\n`);
     const worker = fork(this.options.workerFile || path.join(__dirname, 'acp-worker.js'), [], {
       cwd: session.cwd, detached: process.platform !== 'win32',
       stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
-      env: { ...process.env, FORGE_ACP_MODEL: this.options.model || 'doubao',
-        FORGE_ACP_SESSION_DIR: this.options.sessionDir || path.join(os.homedir(), '.deepseek-agent', 'acp-profiles', this.options.model || 'doubao', session.id),
-        FORGE_ACP_AUTH_FILE: this.options.sessionDir ? '' : path.join(os.homedir(), '.deepseek-agent', 'acp-auth', `${this.options.model || 'doubao'}.json`),
+      env: { ...process.env, FORGE_ACP_MODEL: model,
+        FORGE_ACP_SESSION_DIR: sessionDir,
+        FORGE_ACP_AUTH_FILE: authFile,
         FORGE_ACP_WORKSPACE: session.cwd },
     });
     session.worker = worker;

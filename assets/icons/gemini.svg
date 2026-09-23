@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" width="48" height="48">
+  <rect width="48" height="48" rx="10" fill="#4285F4"/>
+  <path d="M24 8l2.5 5.5L32 16l-5.5 2.5L24 24l-2.5-5.5L16 16l5.5-2.5L24 8z" fill="white"/>
+  <path d="M24 24l2.5 5.5L32 32l-5.5 2.5L24 40l-2.5-5.5L16 32l5.5-2.5L24 24z" fill="white"/>
+  <path d="M8 24l5.5-2.5L16 16l2.5 5.5L24 24l-5.5 2.5L16 32l-2.5-5.5L8 24z" fill="#EA4335"/>
+  <path d="M40 24l-5.5-2.5L32 16l-2.5 5.5L24 24l5.5 2.5L32 32l2.5-5.5L40 24z" fill="#34A853"/>
+  <circle cx="24" cy="24" r="4" fill="#FBBC05"/>
+</svg>

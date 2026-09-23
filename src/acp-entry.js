@@ -1,6 +1,23 @@
 #!/usr/bin/env node
 'use strict';
 // This entry point must not import the terminal CLI or print banners to stdout.
+
+function inferModelFromAionUi() {
+  const convId = process.env.AIONUI_CONVERSATION_ID;
+  if (!convId) return null;
+  const dbPath = require('path').join(require('os').homedir(), '.config', 'AionUi', 'aionui', 'aionui-backend.db');
+  if (!require('fs').existsSync(dbPath)) return null;
+  try {
+    const { spawnSync } = require('child_process');
+    const result = spawnSync('sqlite3', [dbPath, `SELECT extra FROM conversations WHERE id='${convId}';`], { encoding: 'utf8', timeout: 5000 });
+    if (result.status !== 0 || !result.stdout.trim()) return null;
+    const extra = JSON.parse(result.stdout.trim());
+    const agentId = extra.agent_id || '';
+    const match = agentId.match(/^forge-(.+)$/);
+    return match ? match[1] : null;
+  } catch { return null; }
+}
+
 async function main(args = process.argv.slice(2)) {
   if (Number(process.versions.node.split('.')[0]) < 18) throw new Error('Forge ACP needs Node.js 18 or newer. Install a supported Node.js version and npm, then retry.');
   if (process.platform !== 'linux') throw new Error('Forge ACP currently supports Linux only.');
@@ -17,11 +34,19 @@ async function main(args = process.argv.slice(2)) {
     else if (arg.startsWith('--model=')) options.model = arg.slice(8);
     else if (arg === '--session-dir') options.sessionDir = args[++i];
     else if (arg === '--help') {
-      process.stderr.write('Usage: forge-agent-acp [--model doubao|deepseek|gemini] [--session-dir /absolute/profile] [--setup] [--register] [--unregister] [--list-agents] [--api]\n');
+      process.stderr.write('Usage: forge-agent-acp [--model doubao|deepseek|gemini|yuanbao] [--session-dir /absolute/profile] [--setup] [--register] [--unregister] [--list-agents] [--api]\n');
       return;
     } else throw new Error(`Unknown ACP option: ${arg}`);
   }
   options.model = options.model?.toLowerCase();
+  if (options.model === 'deepseek' && !args.some(a => a.startsWith('--model'))) {
+    const inferred = inferModelFromAionUi();
+    if (inferred) {
+      process.stderr.write(`[forge-acp] entry: inferred model=${inferred} from AionUi conversation ${process.env.AIONUI_CONVERSATION_ID}\n`);
+      options.model = inferred;
+    }
+  }
+  process.stderr.write(`[forge-acp] entry: model=${options.model}, args=${JSON.stringify(args)}\n`);
   if (!require('./adapter-factory').SUPPORTED_MODELS.includes(options.model)) throw new Error('Unsupported model. Use doubao, deepseek, or gemini.');
   if (options.sessionDir && !require('path').isAbsolute(options.sessionDir)) throw new Error('--session-dir must be absolute.');
   if (options.register) {
@@ -59,6 +84,7 @@ async function main(args = process.argv.slice(2)) {
       'Press Ctrl+C to stop this waiting server.\n',
     ].join('\n') + '\n');
   }
+  process.stderr.write(`[forge-acp] entry: starting AcpServer with options=${JSON.stringify({ model: options.model, sessionDir: options.sessionDir, sessionStateDir: options.sessionStateDir })}\n`);
   const { AgentSideConnection, ndJsonStream } = await import('@agentclientprotocol/sdk');
   const { Readable, Writable } = require('stream');
   const AcpServer = require('./acp-server');

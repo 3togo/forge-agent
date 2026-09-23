@@ -289,3 +289,30 @@ describe('screenshot()', () => {
     });
   });
 });
+
+describe('browser monitoring integration', () => {
+  test('records exact outgoing prompt and completed provider reply', async () => {
+    const browser = makeBrowser();
+    browser.monitor = { record: jest.fn() };
+    await browser.sendMessage('exact\n<prompt>');
+    await browser.waitForResponse();
+    expect(browser.monitor.record).toHaveBeenCalledWith('input', 'exact\n<prompt>');
+    expect(browser.monitor.record).toHaveBeenCalledWith('status', 'Input sent');
+    expect(browser.monitor.record).toHaveBeenCalledWith('output', 'response');
+  });
+  test('response error is recorded and rethrown instead of reporting a reply', async () => {
+    const browser = makeBrowser();
+    browser.monitor = { record: jest.fn() };
+    mockAdapter.waitForResponse.mockRejectedValue(new Error('generation failed'));
+    await expect(browser.waitForResponse()).rejects.toThrow('generation failed');
+    expect(browser.monitor.record).toHaveBeenCalledWith('response error', 'generation failed');
+    expect(browser.monitor.record).not.toHaveBeenCalledWith('output', expect.anything());
+  });
+  test('closing browser stops monitoring exactly once', async () => {
+    const browser = makeBrowser();
+    browser.monitor = { stop: jest.fn() };
+    await browser.close();
+    await browser.close();
+    expect(browser.monitor.stop).toHaveBeenCalledTimes(1);
+  });
+});

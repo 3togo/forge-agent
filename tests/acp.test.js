@@ -18,7 +18,7 @@ describe('ACP wire handshake', () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-acp-wire-'));
     try {
       const result = spawnSync(process.execPath, [path.join(__dirname, 'fixtures/acp-wire-client.mjs'), temp], { encoding: 'utf8', timeout: 10000 });
-      expect(result.stderr).toBe('');
+      expect(result.stderr.replace(/\[forge-acp\].*\n/g, '')).toBe('');
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('SDK_ROUND_TRIP_OK');
       expect(fs.readFileSync(path.join(temp, 'proof.txt'), 'utf8')).toBe('ACP verified\n');
@@ -28,7 +28,7 @@ describe('ACP wire handshake', () => {
     const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-acp-conversation-'));
     try {
       const result = spawnSync(process.execPath, [path.join(__dirname, 'fixtures/acp-conversation-client.mjs'), temp], { encoding: 'utf8', timeout: 10000 });
-      expect(result.stderr).toBe('');
+      expect(result.stderr.replace(/\[forge-acp\].*\n/g, '')).toBe('');
       expect(result.status).toBe(0);
       expect(result.stdout).toContain('CONVERSATION_DELIVERED_ONCE');
     } finally { fs.rmSync(temp, { recursive: true, force: true }); }

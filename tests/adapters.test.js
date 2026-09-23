@@ -5,6 +5,7 @@ const BaseAdapter = require('../src/adapters/base-adapter');
 const DeepSeekAdapter = require('../src/adapters/deepseek-adapter');
 const GeminiAdapter = require('../src/adapters/gemini-adapter');
 const DoubaoAdapter = require('../src/adapters/doubao-adapter');
+const YuanbaoAdapter = require('../src/adapters/yuanbao-adapter');
 const { getAdapter, getModelUrl, getModelDisplayName, SUPPORTED_MODELS } = require('../src/adapter-factory');
 
 const mockPage = {
@@ -100,11 +101,43 @@ describe('Model Adapters', () => {
     });
   });
 
+  describe('YuanbaoAdapter', () => {
+    let adapter;
+    beforeEach(() => { adapter = new YuanbaoAdapter(mockPage, mockConfig); });
+
+    test('instantiates with ThinkingTracker', () => {
+      expect(adapter.thinkingTracker).toBeDefined();
+    });
+
+    test('returns correct selector lists', () => {
+      expect(adapter._getInputSelectors().length).toBeGreaterThanOrEqual(5);
+      expect(adapter._getSendSelectors().length).toBeGreaterThanOrEqual(3);
+      expect(adapter._getStopSelectors().length).toBeGreaterThanOrEqual(3);
+      expect(adapter._getNewChatSelectors().length).toBeGreaterThanOrEqual(3);
+      expect(adapter._getResponseSelectors().length).toBeGreaterThanOrEqual(3);
+    });
+
+    test('includes Quill editor selectors', () => {
+      const inputs = adapter._getInputSelectors();
+      expect(inputs.some(s => s.includes('ql-editor'))).toBe(true);
+    });
+
+    test('includes Chinese new-chat selectors', () => {
+      const newChat = adapter._getNewChatSelectors();
+      expect(newChat.some(s => s.includes('新建对话'))).toBe(true);
+    });
+
+    test('getModelUrl is correct', () => {
+      expect(adapter.getModelUrl()).toBe('https://yuanbao.tencent.com/chat');
+    });
+  });
+
   describe('AdapterFactory', () => {
     test('getAdapter returns correct instances', () => {
       expect(getAdapter('deepseek', mockPage, mockConfig)).toBeInstanceOf(DeepSeekAdapter);
       expect(getAdapter('gemini', mockPage, mockConfig)).toBeInstanceOf(GeminiAdapter);
       expect(getAdapter('doubao', mockPage, mockConfig)).toBeInstanceOf(DoubaoAdapter);
+      expect(getAdapter('yuanbao', mockPage, mockConfig)).toBeInstanceOf(YuanbaoAdapter);
     });
 
     test('handles aliases', () => {
@@ -112,6 +145,7 @@ describe('Model Adapters', () => {
       expect(getAdapter('bard', mockPage, mockConfig)).toBeInstanceOf(GeminiAdapter);
       expect(getAdapter('r1', mockPage, mockConfig)).toBeInstanceOf(DeepSeekAdapter);
       expect(getAdapter('豆包', mockPage, mockConfig)).toBeInstanceOf(DoubaoAdapter);
+      expect(getAdapter('元宝', mockPage, mockConfig)).toBeInstanceOf(YuanbaoAdapter);
     });
 
     test('is case insensitive', () => {
@@ -135,12 +169,14 @@ describe('Model Adapters', () => {
       expect(getModelUrl('deepseek')).toBe('https://chat.deepseek.com');
       expect(getModelUrl('gemini')).toBe('https://gemini.google.com/app');
       expect(getModelUrl('doubao')).toBe('https://www.doubao.com/chat');
+      expect(getModelUrl('yuanbao')).toBe('https://yuanbao.tencent.com/chat');
     });
 
     test('getModelDisplayName returns human strings', () => {
       expect(getModelDisplayName('deepseek')).toBe('DeepSeek');
       expect(getModelDisplayName('gemini')).toBe('Gemini');
       expect(getModelDisplayName('doubao')).toBe('Doubao (豆包)');
+      expect(getModelDisplayName('yuanbao')).toBe('Yuanbao (元宝)');
       expect(getModelDisplayName('unknown')).toBe('unknown');
     });
 
@@ -148,8 +184,9 @@ describe('Model Adapters', () => {
       expect(SUPPORTED_MODELS).toContain('deepseek');
       expect(SUPPORTED_MODELS).toContain('gemini');
       expect(SUPPORTED_MODELS).toContain('doubao');
+      expect(SUPPORTED_MODELS).toContain('yuanbao');
       expect(SUPPORTED_MODELS).not.toContain('chatgpt');
-      expect(SUPPORTED_MODELS.length).toBe(3);
+      expect(SUPPORTED_MODELS.length).toBe(4);
     });
   });
 

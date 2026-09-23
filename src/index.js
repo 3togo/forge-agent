@@ -94,6 +94,7 @@ function parseArgs(argv) {
     launchAssets: null,
     testModel: null,
     acp        : false,
+    login      : false,
     };
 
     let i = 0;
@@ -118,6 +119,7 @@ function parseArgs(argv) {
       case '--think':       opts.think       = true;    break;
       case '--no-tui':      opts.noTui       = true;    break;
       case '--acp':         opts.acp         = true;    break;
+      case '--login':       opts.login       = true;    break;
       case '--compact':     opts.compact     = true;    break;
       case '--no-memory':   opts.noMemory    = true;    break;
       case '--no-cache':    opts.noCache     = true;    break;
@@ -327,6 +329,10 @@ ${c('1;36', 'CONFIGURATION')}
       --setup            Run the interactive setup wizard
       --config           Alias for --setup
       --config-path      Show path to active config file
+
+${c('1;36', 'AUTHENTICATION')}
+      --login            Open browser to log in and save credentials
+      --login --model=<name>  Log in for a specific model
 
 ${c('1;36', 'DEBUGGING')}
       --debug            Verbose output with raw AI responses
@@ -1262,6 +1268,23 @@ async function main() {
       console.error('Launch assets error: ' + e.message);
     }
     process.exit(0);
+  }
+
+  // ── Login ────────────────────────────────────────────────────────────────
+  if (args.login) {
+    try {
+      const modelName = args.model || config.MODEL;
+      const { getModelDisplayName } = require('./adapter-factory');
+      console.log(`Opening separate login browser for ${getModelDisplayName(modelName)}...`);
+      const { login } = require('./browser-login');
+      const authFile = await login(modelName);
+      console.log(`Login saved: ${authFile}\nStart a new AionUI chat to use it.`);
+      process.exit(0);
+    } catch (err) {
+      logger.error(`Login failed: ${err.message}`);
+      if (config.DEBUG) console.error(err.stack);
+      process.exit(1);
+    }
   }
 
   // ── Model Selector Test ──────────────────────────────────────────────────

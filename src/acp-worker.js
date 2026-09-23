@@ -7,14 +7,22 @@ function main() {
   const send = event => { if (process.connected) process.send(event); };
   process.stdout.write = process.stderr.write.bind(process.stderr);
   const config = require('./config');
+  process.stderr.write(`[forge-acp] worker: env FORGE_ACP_MODEL=${process.env.FORGE_ACP_MODEL}, FORGE_ACP_AUTH_FILE=${process.env.FORGE_ACP_AUTH_FILE}, FORGE_ACP_SESSION_DIR=${process.env.FORGE_ACP_SESSION_DIR}\n`);
+  const authFile = process.env.FORGE_ACP_AUTH_FILE || null;
+  let hasValidAuth = false;
+  try { hasValidAuth = Boolean(authFile && require('./browser-auth').isAuthValid(authFile)); } catch {}
+  const forceHeaded = process.env.FORGE_ACP_HEADED === '1' || process.env.FORGE_ACP_HEADED === 'true';
+  const headlessMode = !forceHeaded;
+  process.stderr.write(`[forge-acp] worker: authFile=${authFile}, hasValidAuth=${hasValidAuth}, forceHeaded=${forceHeaded}, headlessMode=${headlessMode}\n`);
   Object.assign(config, {
     MODEL: process.env.FORGE_ACP_MODEL,
     WORKING_DIR: process.env.FORGE_ACP_WORKSPACE,
     SESSION_DIR: process.env.FORGE_ACP_SESSION_DIR,
-    ACP_AUTH_FILE: process.env.FORGE_ACP_AUTH_FILE || null,
-    HEADLESS: false, NO_TUI: true, NO_INTERACTIVE: true, STRICT_SANDBOX: true,
+    ACP_AUTH_FILE: authFile,
+    HEADLESS: headlessMode, NO_TUI: true, NO_INTERACTIVE: true, STRICT_SANDBOX: true,
     OUTPUT_FILE: null, DISABLE_SPONSOR_NUDGE: true,
   });
+  process.stderr.write(`[forge-acp] worker: config.MODEL=${config.MODEL}, config.HEADLESS=${config.HEADLESS}, config.ACP_AUTH_FILE=${config.ACP_AUTH_FILE}\n`);
   const { executeTool } = require('./tools');
   const { isReadOnly } = require('./permission-store');
   const approvals = new Map();
@@ -93,58 +101,52 @@ function main() {
   }
 
   async function waitForInput() {
-    const until = Date.now() + 180000;
-    let qrAttempted = false;
-    while (!stopping && Date.now() < until) {
-      if (await agent.browser.adapter.isReady()) return;
-      if (!qrAttempted) {
-        qrAttempted = true;
-        try {
-          const { QrLoginManager } = require('./qr-login');
-          const qrLogin = new QrLoginManager(agent.browser.page, config.MODEL);
-          send({ type: 'message', text: 'Attempting QR code login...\n' });
-          const loggedIn = await qrLogin.tryQrLogin(({ imagePath, qrUrl }) => {
-            const msg = qrUrl
-              ? `QR code displayed in terminal. Scan it with your phone to log in.\n`
-              : `QR code image saved: ${imagePath}\nOpen it and scan with your phone to log in.\n`;
-            send({ type: 'message', text: msg });
-          });
-          if (loggedIn) {
-            send({ type: 'message', text: 'QR login successful!\n' });
-            return;
-          }
-          send({ type: 'message', text: 'QR login not available. Please log in manually in the browser window.\n' });
-        } catch (err) {
-          send({ type: 'message', text: `QR login failed: ${err.message}\n` });
-        }
-      }
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-    throw Object.assign(new Error('Browser input is not ready. Log in in the browser, then retry in this chat.'), { acpBrowserRecoverable: true });
+    if (await agent.browser.adapter.isReady()) return;
+    throw Object.assign(new Error('Authentication required. Run: forge-agent --login --model=' + config.MODEL), { acpLoginRequired: true });
   }
 
   async function prompt(text) {
     if (busy || stopping) return;
     busy = true;
+    process.stderr.write(`[forge-acp] prompt: starting, text="${text?.slice(0, 80)}", busy=${busy}\n`);
     try {
       if (!agent) {
+        process.stderr.write(`[forge-acp] prompt: initializing agent\n`);
         const Agent = require('./agent');
         agent = new Agent({ executeTool: runTool, conversationalReplies: true });
-        agent.browser._waitForEnter = waitForInput;
-        agent.browser._printLoginBanner = () => send({ type: 'message', text: 'Please log in in the browser window. No terminal input is needed.\n' });
-        send({ type: 'message', text: `Opening ${config.MODEL}. Log in in the browser window if prompted; saved login is shared with new chats after a successful reply.\n` });
-        await agent.init();
+        // ACP never performs interactive authentication or reads terminal input.
+        agent.browser._checkLoginAndAttemptQr = waitForInput;
+        const { BrowserMonitor } = require('./browser-monitor');
+        const monitor = new BrowserMonitor(path.join(config.SESSION_DIR, 'monitor'), config.MODEL);
+        agent.browser.monitor = monitor;
+        const monitorUrl = await monitor.serve?.();
+        send({ type: 'message', text: `[Open browser monitor](${monitorUrl || monitor.file})\nLocal archive: ${monitor.file}\n` });
+        send({ type: 'message', text: `Opening ${config.MODEL} in ${config.HEADLESS ? 'background' : 'diagnostic window'} mode...\n` });
+        try { await agent.init(); }
+        catch (err) {
+          agent.browser.monitor?.record('startup error', err.message);
+          await agent.shutdown().catch(() => {});
+          agent = null;
+          throw err;
+        }
+        process.stderr.write(`[forge-acp] prompt: agent.init() completed\n`);
       }
+      process.stderr.write(`[forge-acp] prompt: calling waitForInput()\n`);
       await waitForInput();
+      process.stderr.write(`[forge-acp] prompt: waitForInput() returned, calling agent.run()\n`);
       const result = await agent.run(text);
+      process.stderr.write(`[forge-acp] prompt: agent.run() returned, result=${result ? 'has content' : '4'}\n`);
       if (result) send({ type: 'message', text: String(result) });
       send({ type: 'done', stopReason: 'end_turn' });
+      process.stderr.write(`[forge-acp] prompt: done sent\n`);
     } catch (err) {
+      agent?.browser.monitor?.record('error', err.message);
+      process.stderr.write(`[forge-acp] prompt: error: ${err.message}, stack=${err.stack?.slice(0, 200)}\n`);
       if (err.acpDenied) {
         send({ type: 'message', text: 'Permission declined. The turn stopped without executing that tool.\n' });
         send({ type: 'done', stopReason: 'end_turn' });
-      } else if (err.acpBrowserRecoverable) {
-        send({ type: 'message', text: `Browser needs attention: ${err.message}\nThe browser is staying open. Inspect the page and finish login if needed. You can retry in this chat. If your message was already sent, check its reply before retrying.\n` });
+      } else if (err.acpLoginRequired) {
+        send({ type: 'message', text: `Authentication required for ${config.MODEL}. Run this command in your terminal to log in:\n  forge-agent --login --model=${config.MODEL}\nAfter logging in, start a new chat here.\n` });
         send({ type: 'done', stopReason: 'end_turn' });
       } else send({ type: 'error', message: err.message });
     } finally { busy = false; }

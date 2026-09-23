@@ -2,7 +2,7 @@
 
 **Autonomous AI Coding Agent — No API Key Needed**
 
-Forge Agent drives DeepSeek, Gemini, or Doubao (豆包) through browser
+Forge Agent drives DeepSeek, Gemini, Doubao (豆包), or Yuanbao (元宝) through browser
 automation to code, test, and ship software — completely free.
 
 [![npm version](https://img.shields.io/npm/v/@omar-azam/forge-agent)](https://www.npmjs.com/package/@omar-azam/forge-agent)
@@ -23,7 +23,7 @@ Forge Agent is free and open source. If it saves you time:
 
 ## Why Forge Agent?
 
-- **Free** — No API key. Uses DeepSeek, Gemini, or Doubao's free web UI.
+- **Free** — No API key. Uses DeepSeek, Gemini, Doubao, or Yuanbao's free web UI.
 - **Autonomous** — Reads files, writes code, runs tests. Loops until done.
 - **Cross-platform** — Linux, macOS, Windows, and Docker.
 - **50 days built** — 37+ tools, 1300+ tests, full docs, security audited.
@@ -94,9 +94,22 @@ fa "add TypeScript to this project"
 
 ### Step 3: First Login
 
-On first run, a browser window opens automatically. **Log in to the model's website** (DeepSeek, Gemini, or Doubao) when prompted. After a successful reply, your login is saved and restored in future sessions — no need to log in again.
+On first run, a browser window opens automatically. **Log in to the model's website** (DeepSeek, Gemini, Doubao, or Yuanbao) when prompted. After a successful reply, your login is saved and restored in future sessions — no need to log in again.
 
 ---
+
+## Yuanbao with AionUI
+
+Log in independently, then use the Yuanbao agent in AionUI:
+
+```bash
+node src/index.js --login --model=yuanbao
+```
+
+The login window closes when the site is ready and credentials are saved.
+AionUI chats run in a background browser without stealing focus. Each chat
+reports a local monitor file: open it to watch screenshots, exact browser
+prompts, replies, and errors. See [login and monitoring](docs/AIONUI.md#login-and-browser-ownership).
 
 ## Setting Up the Doubao (豆包) Agent
 
@@ -235,6 +248,7 @@ forge-agent --think "design a microservices architecture"
 forge-agent --model=deepseek "task"   # Default, best tool-call reliability
 forge-agent --model=gemini "task"     # Google's free tier
 forge-agent --model=doubao "task"     # ByteDance's 豆包 (also: --model=豆包)
+forge-agent --model=yuanbao "task"    # Tencent's 元宝 (also: --model=元宝)
 ```
 
 ### Agent Profiles
@@ -327,7 +341,7 @@ forge-agent --new-plugin my_tool # generate a stub
 forge-agent [OPTIONS] [TASK]
 
 Core:      --interactive -i  --dir  --model  --profile  --plan  --think
-Models:    --model=deepseek  --model=gemini  --model=doubao
+Models:    --model=deepseek  --model=gemini  --model=doubao  --model=yuanbao
 Sessions:  --resume  --rerun  --history  --no-memory
 Templates: --template  --list-templates  --save-template
 Output:    --format  --output  --no-tui  --compact
@@ -378,6 +392,7 @@ Full reference: `forge-agent --help` or [docs/cli-reference.html](docs/cli-refer
 | `deepseek` | chat.deepseek.com | Default, best tool-call reliability |
 | `gemini` | gemini.google.com/app | Google's free tier |
 | `doubao` | www.doubao.com/chat | ByteDance's 豆包, Chinese UI, ACP default |
+| `yuanbao` | yuanbao.tencent.com/chat | Tencent's 元宝, Chinese UI |
 
 ### Key Configuration Options
 
@@ -412,7 +427,7 @@ Run `forge-agent --setup` for guided configuration.
 
 | Feature | Description |
 |---|---|
-| 🌐 Browser Automation | Drives DeepSeek, Gemini, Doubao — no API key |
+| 🌐 Browser Automation | Drives DeepSeek, Gemini, Doubao, Yuanbao — no API key |
 | 🔧 37+ Built-in Tools | File I/O, git, shell, search, tests, packages, diff, env, processes |
 | 💾 Persistent Memory | Remembers project tech stack and past tasks |
 | 🎭 Agent Profiles | default, backend, frontend, data-science, devops |

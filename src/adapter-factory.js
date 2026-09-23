@@ -1,7 +1,7 @@
 // src/adapter-factory.js — Factory for model adapters
 'use strict';
 
-const SUPPORTED_MODELS = ['deepseek', 'gemini', 'doubao'];
+const SUPPORTED_MODELS = ['deepseek', 'gemini', 'doubao', 'yuanbao'];
 
 /**
  * Get an adapter instance for the specified model.
@@ -44,6 +44,11 @@ function getAdapter(modelName, page, config) {
       const DoubaoAdapter = require('./adapters/doubao-adapter');
       return new DoubaoAdapter(page, config);
     }
+    case 'yuanbao':
+    case '元宝': {
+      const YuanbaoAdapter = require('./adapters/yuanbao-adapter');
+      return new YuanbaoAdapter(page, config);
+    }
     default:
       throw new Error(
         `Unknown model: "${modelName}"\n` +
@@ -62,6 +67,7 @@ function getModelUrl(modelName) {
     deepseek: 'https://chat.deepseek.com',
     gemini  : 'https://gemini.google.com/app',
     doubao  : 'https://www.doubao.com/chat',
+    yuanbao : 'https://yuanbao.tencent.com/chat',
   };
   return urls[name] || urls.deepseek;
 }
@@ -74,6 +80,7 @@ function getModelDisplayName(modelName) {
     deepseek: 'DeepSeek',
     gemini  : 'Gemini',
     doubao  : 'Doubao (豆包)',
+    yuanbao : 'Yuanbao (元宝)',
   };
   return names[(modelName || '').toLowerCase()] || modelName;
 }

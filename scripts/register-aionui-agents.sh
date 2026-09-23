@@ -113,7 +113,7 @@ if [[ "$MODE" == "acp" ]]; then
   if [[ -n "$MODELS" ]]; then
     ARGS="$ARGS --models=$MODELS"
   fi
-  "$NODE_BIN" "$FORGE_AGENT" $ARGS
+  "$FORGE_AGENT" $ARGS
 else
   ARGS="--register --api"
   if [[ -n "$MODELS" ]]; then
@@ -122,7 +122,7 @@ else
   for kv in $API_KEYS; do
     ARGS="$ARGS --api-key=$kv"
   done
-  "$NODE_BIN" "$FORGE_AGENT" $ARGS
+  "$FORGE_AGENT" $ARGS
 fi
 
 echo ""

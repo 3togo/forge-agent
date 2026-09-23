@@ -30,7 +30,7 @@ describe('ACP reconnect with stale client session IDs', () => {
       first.prompt({ sessionId: a, prompt: [{ type: 'text', text: 'profile' }] }),
       second.prompt({ sessionId: b, prompt: [{ type: 'text', text: 'profile' }] }),
     ]);
-    const profiles = updates.filter(u => u.content?.text.includes('acp-profiles')).map(u => u.content.text);
+    const profiles = updates.filter(u => u.content?.text.startsWith(path.join(os.homedir(), '.deepseek-agent', 'acp-profiles') + path.sep)).map(u => u.content.text);
     expect(profiles).toHaveLength(2);
     expect(profiles[0]).not.toBe(profiles[1]);
     expect(profiles.some(p => p.endsWith(a))).toBe(true);
@@ -40,7 +40,7 @@ describe('ACP reconnect with stale client session IDs', () => {
     const { sessionId } = await first.newSession({ cwd: root });
     const request = { sessionId, prompt: [{ type: 'text', text: 'profile' }] };
     await first.prompt(request); await first.close(); await second.prompt(request);
-    const profiles = updates.filter(u => u.content?.text.includes('acp-profiles')).map(u => u.content.text);
+    const profiles = updates.filter(u => u.content?.text.startsWith(path.join(os.homedir(), '.deepseek-agent', 'acp-profiles') + path.sep)).map(u => u.content.text);
     expect(profiles).toHaveLength(2);
     expect(profiles[0]).toBe(profiles[1]);
   });
@@ -51,7 +51,7 @@ describe('ACP reconnect with stale client session IDs', () => {
     await first.prompt(request(a));
     await first.prompt(request(b));
     await first.prompt(request(a));
-    const profiles = updates.filter(u => u.content?.text.includes('acp-profiles')).map(u => u.content.text);
+    const profiles = updates.filter(u => u.content?.text.startsWith(path.join(os.homedir(), '.deepseek-agent', 'acp-profiles') + path.sep)).map(u => u.content.text);
     expect(profiles).toHaveLength(3);
     expect(profiles[0]).toBe(profiles[2]);
     expect(profiles[0]).not.toBe(profiles[1]);

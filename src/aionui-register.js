@@ -6,15 +6,56 @@ const { spawnSync } = require('child_process');
 const { SUPPORTED_MODELS, getModelDisplayName } = require('./adapter-factory');
 
 const FORGE_ACP_PATH = path.join(__dirname, '..', 'forge-agent-acp');
+const ICONS_SRC_DIR = path.join(__dirname, '..', 'assets', 'icons');
+
+function getAionUiCustomAssetsDir() {
+  return path.join(os.homedir(), '.config', 'AionUi', 'aionui', 'custom-assets', 'logos', 'forge');
+}
+
+function getAionUiAssetsBaseUrl() {
+  return '/api/assets/logos/forge';
+}
+
+function installIcons() {
+  const destDir = getAionUiCustomAssetsDir();
+  const results = [];
+  try {
+    fs.mkdirSync(destDir, { recursive: true });
+    for (const model of SUPPORTED_MODELS) {
+      const srcPath = path.join(ICONS_SRC_DIR, `${model}.svg`);
+      if (!fs.existsSync(srcPath)) {
+        results.push({ model, status: 'skipped', reason: 'no source SVG' });
+        continue;
+      }
+      const destPath = path.join(destDir, `${model}.svg`);
+      fs.copyFileSync(srcPath, destPath);
+      results.push({ model, status: 'installed', path: destPath });
+    }
+  } catch (err) {
+    results.push({ model: 'all', status: 'error', reason: err.message });
+  }
+  return results;
+}
+
+function getIconPath(model) {
+  const destDir = getAionUiCustomAssetsDir();
+  const destPath = path.join(destDir, `${model}.svg`);
+  if (fs.existsSync(destPath)) {
+    return `${getAionUiAssetsBaseUrl()}/${model}.svg`;
+  }
+  const meta = MODEL_META[model];
+  return meta ? meta.icon : `emoji:❓`;
+}
 
 function getAionUiDbPath() {
   return path.join(os.homedir(), '.config', 'AionUi', 'aionui', 'aionui-backend.db');
 }
 
 const MODEL_META = {
-  deepseek: { name: 'DeepSeek (Forge)', icon: 'emoji:🔍', description: 'DeepSeek via Forge browser adapter' },
-  doubao: { name: 'Doubao (Forge)', icon: 'emoji:🫘', description: 'Doubao (豆包) via Forge browser adapter' },
-  gemini: { name: 'Gemini (Forge)', icon: 'emoji:✨', description: 'Gemini via Forge browser adapter' },
+  deepseek: { name: 'DeepSeek (Forge)', icon: '/api/assets/logos/forge/deepseek.svg', description: 'DeepSeek via Forge browser adapter' },
+  doubao: { name: 'Doubao (Forge)', icon: '/api/assets/logos/forge/doubao.svg', description: 'Doubao (豆包) via Forge browser adapter' },
+  gemini: { name: 'Gemini (Forge)', icon: '/api/assets/logos/forge/gemini.svg', description: 'Gemini via Forge browser adapter' },
+  yuanbao: { name: 'Yuanbao (Forge)', icon: '/api/assets/logos/forge/yuanbao.svg', description: 'Yuanbao (元宝) via Forge browser adapter' },
 };
 
 function findAionUiDb(override) {
@@ -49,15 +90,19 @@ function registerAcpAgents(dbPath, models) {
   const now = Date.now();
   const results = [];
 
+  installIcons();
+
   for (const model of models) {
     const meta = MODEL_META[model];
     if (!meta) { results.push({ model, status: 'skipped', reason: 'unknown model' }); continue; }
+
+    const iconPath = getIconPath(model);
 
     const agentId = `forge-${model}`;
     const args = `--model=${model}`;
     const id = spawnSync('node', ['-e', 'console.log(require("crypto").randomBytes(16).toString("hex"))'], { encoding: 'utf8' }).stdout.trim();
 
-    const sql = `INSERT INTO agent_metadata (id, agent_id, user_id, icon, name, name_i18n, description, description_i18n, backend, agent_type, agent_source, agent_source_info, enabled, command, args, env, native_skills_dirs, behavior_policy, yolo_id, agent_capabilities, auth_methods, config_options, available_modes, available_models, available_commands, sort_order, command_override, env_override, created_at, updated_at, skill_delivery) VALUES ('${id}', '${agentId}', NULL, '${meta.icon}', '${meta.name}', '{}', '${meta.description}', '{}', 'acp', 'acp', 'custom', NULL, 1, '${command}', '${args}', '[]', '[]', NULL, NULL, '[]', '[]', '[]', '[]', '[]', '[]', 1000, NULL, NULL, ${now}, ${now}, 'bundled') ON CONFLICT(agent_id) DO UPDATE SET name='${meta.name}', description='${meta.description}', command='${command}', args='${args}', enabled=1, updated_at=${now};`;
+    const sql = `INSERT INTO agent_metadata (id, agent_id, user_id, icon, name, name_i18n, description, description_i18n, backend, agent_type, agent_source, agent_source_info, enabled, command, args, env, native_skills_dirs, behavior_policy, yolo_id, agent_capabilities, auth_methods, config_options, available_modes, available_models, available_commands, sort_order, command_override, env_override, created_at, updated_at, skill_delivery) VALUES ('${id}', '${agentId}', NULL, '${iconPath}', '${meta.name}', '{}', '${meta.description}', '{}', 'acp', 'acp', 'custom', NULL, 1, '${command}', '${args}', '[]', '[]', NULL, NULL, '[]', '[]', '[]', '[]', '[]', '[]', 1000, NULL, NULL, ${now}, ${now}, 'bundled') ON CONFLICT(agent_id) DO UPDATE SET name='${meta.name}', description='${meta.description}', icon='${iconPath}', command='${command}', args='${args}', enabled=1, updated_at=${now};`;
 
     const result = spawnSync('sqlite3', [dbPath, sql], { encoding: 'utf8' });
     if (result.error || result.status !== 0) {
@@ -97,6 +142,7 @@ function registerApiProviders(dbPath, models, apiKeys) {
   const API_META = {
     deepseek: { platform: 'deepseek', name: 'DeepSeek', base_url: 'https://api.deepseek.com/v1', models: '["deepseek-chat","deepseek-reasoner"]' },
     doubao: { platform: 'doubao', name: 'Doubao (豆包)', base_url: 'https://ark.cn-beijing.volces.com/api/v3', models: '["doubao-pro-32k","doubao-pro-128k"]' },
+    yuanbao: { platform: 'yuanbao', name: 'Yuanbao (元宝)', base_url: 'https://api.hunyuan.cloud.tencent.com/v1', models: '["hunyuan-pro","hunyuan-standard","hunyuan-lite"]' },
   };
 
   for (const model of models) {
@@ -135,6 +181,17 @@ async function register(options = {}) {
   const mode = options.api ? 'api' : 'acp';
 
   process.stderr.write(`Registering ${models.join(', ')} as ${mode} agents in AionUi...\n`);
+
+  if (mode === 'acp') {
+    const iconResults = installIcons();
+    for (const r of iconResults) {
+      if (r.status === 'installed') {
+        process.stderr.write(`  ✓ icon: ${r.model} → ${r.path}\n`);
+      } else if (r.status === 'error') {
+        process.stderr.write(`  ✗ icon: ${r.reason}\n`);
+      }
+    }
+  }
 
   let results;
   if (mode === 'acp') {
@@ -200,4 +257,5 @@ module.exports = {
   findAionUiDb, isAionUiRunning, getForgeAcpCommand,
   registerAcpAgents, unregisterAcpAgents, listRegisteredAgents, registerApiProviders,
   MODEL_META, getAionUiDbPath, FORGE_ACP_PATH,
+  installIcons, getIconPath, getAionUiCustomAssetsDir, getAionUiAssetsBaseUrl,
 };

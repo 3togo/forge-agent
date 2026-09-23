@@ -79,7 +79,7 @@ Dependencies can also be installed with `npm install`; if Chromium is missing, r
 open a browser, launch a worker, or contact the AI service.
 
 Composer and response-wait errors end the turn with a visible explanation and
-keep the browser open for inspection or login. Retry in the same chat after
+keep the browser running for inspection through the monitor. Retry in the same chat after
 resolving the issue; if a message was already sent, check its reply first.
 Canceling an active turn or closing the connection still stops the worker and browser.
 
@@ -96,11 +96,48 @@ models, and missing workspaces are rejected with instructions to start a new cha
 
 ## Login and browser ownership
 
-The first prompt opens a visible browser. Log in there if requested; the GUI
-reports that the browser is opening. There is no terminal Enter prompt. Forge
-waits up to three minutes for the chat input to become available. Input readiness
-is not proof of authentication: if the website asks for login after submitting,
-complete login before retrying in a new chat.
+Log in separately before using Yuanbao in AionUI:
+
+```bash
+node src/index.js --login --model=yuanbao
+```
+
+This opens a dedicated login browser profile, waits up to three minutes for site
+readiness, saves credentials, and closes the window. No task is sent and no Enter
+key is required. Running it again checks the website even when saved credentials
+exist. After renewing login, start a new AionUI chat.
+
+AionUI workers run headlessly, including when credentials are missing or expired.
+They never initiate QR login or open an authentication window. If the page is not
+ready, the turn ends with the separate login command. Site readiness remains a
+heuristic; providers may still require authentication upon submission.
+
+### Monitor browser input and output
+
+The first prompt reports an **Open browser monitor** HTTP link. Open it in your
+browser; the read-only viewer listens only on localhost and uses an unguessable
+URL. It refreshes every three seconds with screenshots and the latest 30 events:
+exact prompts passed to the browser (including agent instructions/tool results),
+completed provider replies, and errors. Screenshots show in-progress generation.
+The monitor never brings the automated browser to the foreground.
+
+The HTTP link lasts while the worker is running. The archive remains at
+`~/.deepseek-agent/acp-profiles/<model>/<session-id>/monitor/index.html`.
+If your browser cannot read local files, serve an existing archive with:
+
+```bash
+node src/browser-monitor.js /absolute/path/to/monitor/index.html
+```
+
+Open the localhost URL printed by that command; Ctrl+C stops the archive viewer.
+
+The adjacent `events.jsonl` preserves the full event history and can also be
+watched with `tail -f`. These owner-only local files contain chat content and
+screenshots; delete the session's `monitor` directory when no longer needed.
+A force-killed worker may leave the last snapshot without a closed status; check
+the displayed timestamp. To inspect an actual browser window deliberately, set
+`FORGE_ACP_HEADED=1` in the custom agent environment. This does not enable login
+inside AionUI.
 
 Each ACP conversation uses `~/.deepseek-agent/acp-profiles/<model>/<session-id>`.
 This keeps simultaneous chats and project chats from competing for the same
@@ -170,11 +207,16 @@ official ACP client SDK. To repeat the live smoke test (this contacts Doubao):
 
 ```bash
 node scripts/acp-live-check.mjs
+# Yuanbao, including saved-login preflight and monitor verification:
+node scripts/acp-live-check.mjs --model=yuanbao
+# Exercise show_info answers followed by TASK_COMPLETE:
+node scripts/acp-live-check.mjs --model=yuanbao --show-info
 ```
 
 It checks two turns in one conversation and another independent conversation,
-using a temporary empty project and denying tool permission requests. It uses
-the saved Doubao login. This verifies the provider and ACP transport; AionUi's
+using a temporary empty project and denying tool permission requests. It verifies the selected model’s saved login in a fresh headless profile before
+starting the test. The default model is Doubao. It also checks that each session’s
+monitor records browser input/output and contains a screenshot. This verifies the provider and ACP transport; AionUi's
 rendering still needs a separate check through an authenticated AionUi client.
 
 The architectural reference was the local DuoBaoAgent project; see the

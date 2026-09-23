@@ -10,12 +10,13 @@ test('a browser error ends the turn, keeps the browser alive, and permits a retr
   const browser = { adapter: { isReady: jest.fn().mockResolvedValue(true) } };
   const agent = {
     browser, init: jest.fn().mockResolvedValue(), shutdown: jest.fn().mockResolvedValue(),
-    run: jest.fn().mockRejectedValueOnce(Object.assign(new Error('Composer unavailable'), { acpBrowserRecoverable: true })).mockResolvedValueOnce('Reply'),
+    run: jest.fn().mockRejectedValueOnce(Object.assign(new Error('Authentication required. Run: forge-agent --login --model=doubao'), { acpLoginRequired: true })).mockResolvedValueOnce('Reply'),
   };
   const config = {};
   const workerPath = path.resolve(__dirname, '../src/acp-worker.js');
   const realRequire = createRequire(workerPath);
   const mockRequire = name => {
+    if (name === './browser-monitor') return { BrowserMonitor: class { record() {} } };
     if (name === './agent') return function (options) {
       expect(options.conversationalReplies).toBe(true);
       return agent;
@@ -44,7 +45,7 @@ test('a browser error ends the turn, keeps the browser alive, and permits a retr
   }
   await turn('hello', 1);
   expect(events.some(e => e.type === 'error')).toBe(false);
-  expect(events.some(e => e.text?.includes('browser is staying open'))).toBe(true);
+  expect(events.some(e => e.text?.includes('forge-agent --login --model=doubao'))).toBe(true);
   expect(agent.shutdown).not.toHaveBeenCalled();
   await turn('retry', 2);
   expect(agent.init).toHaveBeenCalledTimes(1);

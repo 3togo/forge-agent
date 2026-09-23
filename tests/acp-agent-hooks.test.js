@@ -81,6 +81,23 @@ describe('real agent loop ACP execution hook', () => {
     expect(instance.browser.sendMessage).toHaveBeenCalledTimes(2);
     expect(instance.browser.waitForResponse).toHaveBeenCalledTimes(2);
   });
+  test('show_info answer becomes a normal ACP reply instead of TASK_COMPLETE', async () => {
+    const answer = '我是元宝。I can use read_file to help with your project.';
+    const instance = agent({ executeTool: jest.fn().mockResolvedValue({ displayed: true, content: answer }), conversationalReplies: true });
+    instance.browser.waitForResponse.mockReset()
+      .mockResolvedValueOnce('<tool_call>{"tool":"show_info","args":{"content":"answer"}}</tool_call>')
+      .mockResolvedValueOnce('TASK_COMPLETE');
+    expect(await instance.run('who are you?')).toBe(answer);
+    expect(instance.browser.sendMessage.mock.calls[1][0]).toContain(answer);
+    expect(instance.browser.sendMessage.mock.calls[1][0]).not.toContain('[object Object]');
+    instance.browser.waitForResponse.mockReset().mockResolvedValueOnce('TASK_COMPLETE');
+    expect(await instance.run('next task')).toBe('Task completed.');
+  });
+  test('ACP preserves a completion summary and removes the internal marker', async () => {
+    const instance = agent({ executeTool: jest.fn(), conversationalReplies: true });
+    instance.browser.waitForResponse.mockReset().mockResolvedValueOnce('TASK_COMPLETE\nFinished the checks.');
+    expect(await instance.run('check')).toBe('Finished the checks.');
+  });
   test('terminal mode retains its permission menu and default executor', async () => {
     await agent({}).run('write a file');
     expect(showPermissionMenu).toHaveBeenCalledTimes(1);

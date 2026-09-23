@@ -112,6 +112,7 @@ class DeepSeekAgent {
    * Returns the final response string, or a partial summary on timeout.
    */
   async run(task, templateName = null) {
+    process.stderr.write(`[forge-acp] agent.run: starting, task="${task?.slice(0, 80)}", model=${config.MODEL}\n`);
     if (this.commandRouter && this.commandRouter.isCommand(task)) {
       const result = await this.commandRouter.execute(task);
       if (result) console.log('\n' + result + '\n');
@@ -125,6 +126,7 @@ class DeepSeekAgent {
 
     // Track consecutive plain-text / unrecognised responses
     // so we can send a correction rather than freezing.
+    const displayedAnswers = [];
     let _consecutiveUnrecognised = 0;
     const MAX_CORRECTION_ATTEMPTS = 3;
 
@@ -189,10 +191,13 @@ class DeepSeekAgent {
         }
 
         logger.info(`Sending task to ${config.MODEL}...`);
+        process.stderr.write(`[forge-acp] agent.run: sending message to browser, model=${config.MODEL}\n`);
 
         try {
           await this.browser.sendMessage(firstMsg);
+          process.stderr.write(`[forge-acp] agent.run: message sent, waiting for response\n`);
         } catch (err) {
+          process.stderr.write(`[forge-acp] agent.run: sendMessage error: ${err.message}\n`);
           this._running = false;
           throw err;
         }
@@ -417,6 +422,9 @@ class DeepSeekAgent {
           }
 
           if (parsed.name === 'show_info' && !isError) {
+            if (this.options.conversationalReplies && typeof result?.content === 'string') {
+              displayedAnswers.push(result.content);
+            }
             try {
               const answerContent = (result && typeof result === 'object' && result.content)
                 ? result.content
@@ -435,7 +443,8 @@ class DeepSeekAgent {
 
           progress.recordToolResult(parsed.name, result, isError);
 
-          const feedbackMsg = this.conversation.addToolResult(parsed.name, result, isError);
+          const feedbackMsg = this.conversation.addToolResult(parsed.name,
+            result && typeof result === 'object' ? JSON.stringify(result) : result, isError);
 
           const estimatedTokens = this.conversation.messages
             .reduce((sum, m) => sum + Math.ceil(
@@ -473,7 +482,11 @@ class DeepSeekAgent {
         if (parsed.type === 'final' || parsed.type === 'task_complete') {
           _consecutiveUnrecognised = 0;
 
-          const content = parsed.content || rawResponse;
+          let content = parsed.content || rawResponse;
+          if (this.options.conversationalReplies && parsed.type === 'task_complete') {
+            const summary = content.replace(/\bTASK_COMPLETE\b/g, '').trim();
+            content = [...displayedAnswers, summary].filter(Boolean).join('\n\n') || 'Task completed.';
+          }
 
           // Safety net: if the response looks like a missed tool call
           const looksLikeToolCall = (
@@ -482,7 +495,7 @@ class DeepSeekAgent {
             /write_file|read_file|run_command|list_directory/i.test(content.slice(0, 200))
           );
 
-          if (looksLikeToolCall) {
+          if (looksLikeToolCall && !(this.options.conversationalReplies && parsed.type === 'task_complete' && displayedAnswers.length)) {
             logger.warn('Response looks like a tool call but was not parsed — asking AI to retry format...');
             const retry = this.conversation.addToolResult(
               'SYSTEM',

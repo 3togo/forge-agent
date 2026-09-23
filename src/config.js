@@ -31,6 +31,7 @@ const DEFAULTS = {
 
   // Display
   HEADLESS           : false,
+  BROWSER_MINIMIZED  : false,
   DEBUG              : false,
   NO_TUI             : false,
   COMPACT_OUTPUT     : false,

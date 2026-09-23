@@ -25,8 +25,21 @@ class DeepSeekBrowser {
 
   async launch() {
     logger.info(`Launching browser for ${config.MODEL} with persistent session...`);
+    process.stderr.write(`[forge-acp] browser.launch: model=${config.MODEL}, headless=${config.HEADLESS}, minimized=${config.BROWSER_MINIMIZED}, sessionDir=${config.SESSION_DIR}, acpAuthFile=${config.ACP_AUTH_FILE}\n`);
 
     const sessionDir = path.resolve(config.SESSION_DIR);
+
+    const launchArgs = [
+      '--disable-blink-features=AutomationControlled',
+      '--no-first-run',
+      '--disable-default-apps',
+      '--no-sandbox',
+      '--disable-setuid-sandbox',
+    ];
+
+    if (config.BROWSER_MINIMIZED) {
+      launchArgs.push('--start-minimized');
+    }
 
     this.context = await chromium.launchPersistentContext(sessionDir, {
       headless      : config.HEADLESS,
@@ -36,13 +49,7 @@ class DeepSeekBrowser {
         'AppleWebKit/537.36 (KHTML, like Gecko)',
         'Chrome/124.0.0.0 Safari/537.36',
       ].join(' '),
-      args: [
-        '--disable-blink-features=AutomationControlled',
-        '--no-first-run',
-        '--disable-default-apps',
-        '--no-sandbox',
-        '--disable-setuid-sandbox',
-      ],
+      args: launchArgs,
       ignoreDefaultArgs: ['--enable-automation'],
     });
 
@@ -63,6 +70,7 @@ class DeepSeekBrowser {
     // Initialize model adapter
     this.adapter = getAdapter(config.MODEL, this.page, config);
 
+    this.monitor?.start(this.page);
     await this._navigate(getModelUrl(config.MODEL));
 
     await this._checkLoginAndAttemptQr();
@@ -73,6 +81,7 @@ class DeepSeekBrowser {
   async close() {
     if (this._closed) return;
     this._closed = true;
+    this.monitor?.stop();
     try { await this.context?.close(); } catch {}
   }
 
@@ -171,24 +180,30 @@ class DeepSeekBrowser {
 
   async sendMessage(text) {
     if (!this.adapter) throw new Error('Browser not initialized');
-    
+    process.stderr.write(`[forge-acp] browser.sendMessage: model=${config.MODEL}, text="${text?.slice(0, 80)}"\n`);
+
+    this.monitor?.record('input', text);
     try {
-      return await this.adapter.sendMessage(text);
+      const result = await this.adapter.sendMessage(text);
+      this.monitor?.record('status', 'Input sent');
+      return result;
     } catch (firstErr) {
+      this.monitor?.record('send error', firstErr.message);
+      process.stderr.write(`[forge-acp] browser.sendMessage: first error: ${firstErr.message}\n`);
       const msg = firstErr.message.toLowerCase();
-      // If it looks like a selector error or timeout, wait and retry once
       if (msg.includes('not found') || msg.includes('selector') || msg.includes('timeout')) {
         logger.warn('Send failed — waiting 3s and retrying...');
         await this.page.waitForTimeout(3000);
-        
+
         try {
           return await this.adapter.sendMessage(text);
         } catch (secondErr) {
-          // Take debug screenshot on final failure
+          process.stderr.write(`[forge-acp] browser.sendMessage: second error: ${secondErr.message}\n`);
           try {
-            const debugPath = '/tmp/forge-selector-debug.png';
+            const debugPath = `/tmp/forge-selector-debug-${config.MODEL}-${Date.now()}.png`;
             await this.page.screenshot({ path: debugPath });
             logger.dim(`Debug screenshot saved: ${debugPath}`);
+            process.stderr.write(`[forge-acp] browser.sendMessage: screenshot saved to ${debugPath}\n`);
           } catch (e) {}
           throw secondErr;
         }
@@ -197,12 +212,18 @@ class DeepSeekBrowser {
     }
   }
 
-  // ── Waiting for Response ───────────────────────────────────────────────────
-
   async waitForResponse() {
     if (!this.adapter) throw new Error('Browser not initialized');
-    const response = await this.adapter.waitForResponse();
-    // A successful provider reply is the point at which we save usable login state.
+    process.stderr.write(`[forge-acp] browser.waitForResponse: model=${config.MODEL}, starting\n`);
+    let response;
+    try {
+      response = await this.adapter.waitForResponse();
+      this.monitor?.record('output', response);
+    } catch (err) {
+      this.monitor?.record('response error', err.message);
+      throw err;
+    }
+    process.stderr.write(`[forge-acp] browser.waitForResponse: got response, length=${response?.length || 0}\n`);
     if (config.ACP_AUTH_FILE) {
       try { await require('./browser-auth').saveAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
       catch (err) { logger.warn(`Could not save login for new chats: ${err.message}`); }
