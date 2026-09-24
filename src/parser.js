@@ -1,6 +1,8 @@
 // src/parser.js — Parse DeepSeek's text responses to extract tool calls
 'use strict';
 
+const { PROTOCOL, toolForOperation } = require('./forge-execution-contract');
+
 /**
  * Parse a DeepSeek/ChatGPT/Gemini response into a structured result.
  *
@@ -17,6 +19,11 @@ function parseResponse(rawText) {
 
   const text = rawText.trim();
   if (!text) return { type: 'empty' };
+
+  // Yuanbao uses a deliberately namespaced protocol so its native OneAgent
+  // tools cannot be confused with Forge's host-side workspace tools.
+  const forgeMatch = text.match(/<forge_request>\s*([\s\S]*?)\s*<\/forge_request>/i);
+  if (forgeMatch) return _parseForgeRequest(forgeMatch[1], text);
 
   // ── Strategy 1: <tool_call> XML tags ─────────────────────────────────────
   const xmlMatch = text.match(/<tool_call>\s*([\s\S]*?)\s*<\/tool_call>/i);
@@ -57,6 +64,32 @@ function parseResponse(rawText) {
 
   // ── Strategy 6: plain text / conversational response ─────────────────────
   return { type: 'text', content: text };
+}
+
+function _parseForgeRequest(jsonStr, rawText) {
+  const request = _tryJSONParse(String(jsonStr || '').trim());
+  if (!request || typeof request !== 'object' || Array.isArray(request)) {
+    return { type: 'error', message: 'Invalid forge_request JSON.' };
+  }
+  if (request.protocol !== PROTOCOL) {
+    return { type: 'error', message: `Unsupported Forge protocol: ${request.protocol || '(missing)'}.` };
+  }
+  const tool = toolForOperation(request.operation);
+  if (!tool) {
+    return { type: 'error', message: `Unknown Forge operation: ${request.operation || '(missing)'}.` };
+  }
+  const args = request.arguments == null ? {} : request.arguments;
+  if (typeof args !== 'object' || Array.isArray(args)) {
+    return { type: 'error', message: 'forge_request arguments must be a JSON object.' };
+  }
+  return {
+    type: 'tool_call',
+    name: tool,
+    args,
+    protocol: PROTOCOL,
+    operation: request.operation,
+    rawText,
+  };
 }
 
 // ─────────────────────────────────────────────
@@ -279,7 +312,8 @@ function containsTaskComplete(text) { return _containsTaskComplete(text); }
 
 function hasToolCall(text) {
   if (!text) return false;
-  return /<tool_call>/i.test(text)
+  return /<forge_request>/i.test(text)
+    || /<tool_call>/i.test(text)
     || /```(?:tool_call|json)/i.test(text)
     || /\{[\s\S]*"(?:tool|name)"\s*:/i.test(text)
     || /^\s*[a-zA-Z_]\w*\s*\(/.test(text);  // function call style
@@ -287,6 +321,8 @@ function hasToolCall(text) {
 
 function extractLeadingText(text) {
   if (!text) return '';
+  const forgeTag = text.indexOf('<forge_request>');
+  if (forgeTag > 0) return text.slice(0, forgeTag).trim();
   const tag = text.indexOf('<tool_call>');
   if (tag > 0) return text.slice(0, tag).trim();
   const tick = text.indexOf('```');

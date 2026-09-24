@@ -28,4 +28,24 @@ describe('Yuanbao response DOM extraction', () => {
       <div contenteditable="true">draft</div>`);
     expect(await adapter._getLastAssistantText()).toBe('new\n\n```js\nconst n = 1;\n```');
   });
+
+  test('detects actual provider-native command execution inside Expert mode', async () => {
+    await page.setContent(`<div data-message-role="assistant">
+      <div class="hyc-component-deep-search-agent"><p>已运行2次命令</p><div data-tool-name="bash">pwd</div></div>
+    </div>`);
+    expect(await adapter._hasNativeAgentResponse()).toBe(true);
+  });
+
+  test('allows a compliant Forge request wrapped by Yuanbao Expert mode', async () => {
+    await page.setContent(`<div data-message-role="assistant">
+      <div class="hyc-component-deep-search-agent"><p>Processing</p></div>
+    </div>`);
+    const request = '<forge_request>{"protocol":"forge-workspace-v1","operation":"forge.workspace.search","arguments":{}}</forge_request>';
+    expect(await adapter._hasNativeAgentResponse(request)).toBe(false);
+  });
+
+  test('does not reject an ordinary assistant response', async () => {
+    await page.setContent('<div data-message-role="assistant"><p>plain response</p></div>');
+    expect(await adapter._hasNativeAgentResponse()).toBe(false);
+  });
 });

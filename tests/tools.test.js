@@ -86,7 +86,7 @@ describe('Tool registry', () => {
     'read_file', 'write_file', 'append_to_file', 'replace_in_file',
     'delete_file', 'list_directory', 'create_directory', 'move_file',
     'copy_file', 'get_file_info', 'run_command', 'find_files',
-    'search_in_files', 'read_url', 'write_files',
+    'search_in_files', 'workspace_search', 'read_url', 'write_files',
   ];
 
   test('all 15 tools are registered', () => {
@@ -487,6 +487,36 @@ describe('search_in_files', () => {
       pattern: 'HELLO', directory: tmp('search_dir'),
     });
     expect(result).toContain('hello');
+  });
+});
+
+describe('workspace_search', () => {
+  beforeAll(async () => {
+    await writeTemp('rg_dir/source.js', 'const ForgeMarker = true;\nconst other = 1;');
+    await writeTemp('rg_dir/notes.txt', 'ForgeMarker in notes');
+  });
+
+  test('searches the local workspace and reports line numbers', async () => {
+    const result = await executeTool('workspace_search', {
+      pattern: 'ForgeMarker', directory: tmp('rg_dir'), context_lines: 0,
+    });
+    expect(result).toContain('source.js:1:');
+    expect(result).toContain('notes.txt:1:');
+  });
+
+  test('supports ripgrep globs', async () => {
+    const result = await executeTool('workspace_search', {
+      pattern: 'ForgeMarker', directory: tmp('rg_dir'), glob: '*.js', context_lines: 0,
+    });
+    expect(result).toContain('source.js');
+    expect(result).not.toContain('notes.txt');
+  });
+
+  test('reports no matches without treating rg status 1 as an error', async () => {
+    const result = await executeTool('workspace_search', {
+      pattern: 'definitely_absent', directory: tmp('rg_dir'), context_lines: 0,
+    });
+    expect(result).toMatch(/No matches/);
   });
 });
 

@@ -6,24 +6,35 @@ const { createHash, randomUUID } = require('crypto');
 function permissionFile(directory, workspace) {
   return path.join(directory, `${createHash('sha256').update(workspace).digest('hex')}.json`);
 }
-function hasProjectWrites(directory, workspace) {
+function readRecord(directory, workspace) {
   try {
     const record = JSON.parse(fs.readFileSync(permissionFile(directory, workspace), 'utf8'));
-    return record.workspace === workspace && record.allowFileWrites === true;
+    return record.workspace === workspace ? record : null;
   } catch (error) {
-    if (error.code === 'ENOENT' || error instanceof SyntaxError) return false;
+    if (error.code === 'ENOENT' || error instanceof SyntaxError) return null;
     throw error;
   }
 }
-function saveProjectWrites(directory, workspace) {
+function hasProjectPermission(directory, workspace, permission) {
+  const record = readRecord(directory, workspace);
+  return record?.[permission] === true;
+}
+function saveProjectPermission(directory, workspace, permission) {
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   const file = permissionFile(directory, workspace);
   const temporary = `${file}.${randomUUID()}.tmp`;
   try {
-    fs.writeFileSync(temporary, JSON.stringify({ workspace, allowFileWrites: true }), { mode: 0o600, flag: 'wx' });
+    const record = { ...(readRecord(directory, workspace) || {}), workspace, [permission]: true };
+    fs.writeFileSync(temporary, JSON.stringify(record), { mode: 0o600, flag: 'wx' });
     fs.renameSync(temporary, file);
   } finally {
     try { fs.unlinkSync(temporary); } catch (error) { if (error.code !== 'ENOENT') throw error; }
   }
 }
-module.exports = { hasProjectWrites, saveProjectWrites };
+function hasProjectWrites(directory, workspace) {
+  return hasProjectPermission(directory, workspace, 'allowFileWrites');
+}
+function saveProjectWrites(directory, workspace) {
+  return saveProjectPermission(directory, workspace, 'allowFileWrites');
+}
+module.exports = { hasProjectPermission, saveProjectPermission, hasProjectWrites, saveProjectWrites };

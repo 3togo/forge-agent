@@ -3,7 +3,7 @@
 
 const fs            = require('fs');
 const path          = require('path');
-const { execSync }  = require('child_process');
+const { execSync, execFileSync } = require('child_process');
 const http          = require('http');
 const https         = require('https');
 const config        = require('./config');
@@ -605,6 +605,54 @@ const TOOLS = {
       if (matches.length === 0) return `No matches found for: ${pattern}`;
       const result = matches.join('\n' + '─'.repeat(40) + '\n');
       return truncate(result, config.MAX_OUTPUT_LENGTH, 'text');
+    },
+  },
+
+  // ── Workspace Search (ripgrep) ─────────────────────────────────────────────
+  workspace_search: {
+    description: 'Fast local workspace text/regex search powered by ripgrep, with a built-in fallback.',
+    parameters: {
+      pattern       : { type: 'string',  required: true,  description: 'Text or regular expression to search for' },
+      directory     : { type: 'string',  required: false, description: 'Directory relative to the workspace (default: ".")' },
+      glob          : { type: 'string',  required: false, description: 'Optional ripgrep glob such as "src/**/*.js"' },
+      case_sensitive: { type: 'boolean', required: false, description: 'Case-sensitive search (default: false)' },
+      context_lines : { type: 'number',  required: false, description: 'Context lines around each match (default: 2)' },
+      max_results   : { type: 'number',  required: false, description: 'Maximum output lines (default: 100)' },
+    },
+    async execute({ pattern, directory = '.', glob, case_sensitive = false, context_lines = 2, max_results = 100 }) {
+      const dir = assertSafePath(directory, 'search');
+      const limit = Math.max(1, Math.min(Number(max_results) || 100, 1000));
+      const context = Math.max(0, Math.min(Number(context_lines) || 0, 20));
+      const args = ['--line-number', '--no-heading', '--color', 'never'];
+      if (!case_sensitive) args.push('--ignore-case');
+      if (context) args.push('--context', String(context));
+      if (glob) args.push('--glob', String(glob));
+      args.push('--', String(pattern), '.');
+
+      try {
+        const output = execFileSync('rg', args, {
+          cwd: dir,
+          encoding: 'utf8',
+          maxBuffer: 10 * 1024 * 1024,
+          stdio: ['ignore', 'pipe', 'pipe'],
+        });
+        const lines = output.trimEnd().split('\n');
+        const clipped = lines.slice(0, limit);
+        if (lines.length > limit) clipped.push(`[truncated: ${lines.length - limit} additional lines]`);
+        return truncate(clipped.join('\n'), config.MAX_OUTPUT_LENGTH, 'text');
+      } catch (err) {
+        if (err.status === 1) return `No matches found for: ${pattern}`;
+        if (err.code === 'ENOENT') {
+          return TOOLS.search_in_files.execute({
+            pattern,
+            directory,
+            file_pattern: glob,
+            case_sensitive,
+            context_lines: context,
+          });
+        }
+        throw classifyCommandError(err, `rg ${args.join(' ')}`);
+      }
     },
   },
 

@@ -18,7 +18,7 @@ const TOOL_CATEGORIES = {
 
 const READ_ONLY_TOOLS = new Set([
   'read_file', 'list_directory', 'get_file_info',
-  'search_in_files', 'search_codebase', 'find_files',
+  'search_in_files', 'workspace_search', 'search_codebase', 'find_files',
   'git_status', 'git_log', 'git_diff', 'git_branches', 'git_show', 'git_blame',
   'list_env_files', 'check_env_vars', 'read_env',
   'list_processes', 'read_process_logs', 'read_clipboard',

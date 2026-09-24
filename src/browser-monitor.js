@@ -1,6 +1,8 @@
 'use strict';
 const fs = require('fs');
 const path = require('path');
+const { randomUUID } = require('crypto');
+const { ProviderTransactionRecorder } = require('./provider-transaction-recorder');
 const escape = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]);
 
 // Read-only loopback viewer: token-protected, with no browser control endpoint.
@@ -33,6 +35,8 @@ class BrowserMonitor {
     this.file = path.join(directory, 'index.html');
     this.model = model;
     this.events = [];
+    this.transactions = [];
+    this.activeProviderCallId = null;
     fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
     this.record('status', 'Starting browser');
   }
@@ -51,6 +55,31 @@ class BrowserMonitor {
       this.events = this.events.slice(-30);
       this.render();
     } catch (err) { process.stderr.write(`Browser monitor: ${err.message}\n`); }
+  }
+  beginProviderCall(operation) {
+    const id = randomUUID();
+    this.activeProviderCallId = id;
+    this.recordTransaction({
+      time: new Date().toISOString(), id, providerCallId: id,
+      kind: 'provider.call.started', operation,
+    });
+    return id;
+  }
+  endProviderCall(id, status, error) {
+    if (!id) return;
+    this.recordTransaction({
+      time: new Date().toISOString(), id, providerCallId: id,
+      kind: 'provider.call.finished', status, ...(error ? { error: String(error) } : {}),
+    });
+    if (this.activeProviderCallId === id) this.activeProviderCallId = null;
+  }
+  recordTransaction(transaction) {
+    try {
+      fs.appendFileSync(path.join(this.directory, 'transactions.jsonl'), JSON.stringify(transaction) + '\n', { mode: 0o600 });
+      this.transactions.push(transaction);
+      this.transactions = this.transactions.slice(-80);
+      this.render();
+    } catch (err) { process.stderr.write(`Provider transaction monitor: ${err.message}\n`); }
   }
   render() {
     const { parseResponse } = require('./parser');
@@ -73,13 +102,20 @@ ${answer ? `<p><small>${escape(answer.time)}</small></p><pre id="latest-answer">
 <details><summary>Browser screenshot${this.stopped ? ' (last saved frame)' : ''}</summary>
 ${this.screenshot ? `<img alt="Latest browser screenshot" src="data:image/png;base64,${this.screenshot}">` : '<p>Waiting for first screenshot…</p>'}</details>
 <h2>Recent browser events</h2><p>Newest first. Expand an event to see its full input or output. Full history is saved in events.jsonl.</p>
-${[...this.events].reverse().map(e => `<details><summary>${escape(e.type)} · <small>${escape(e.time)}</small></summary><pre>${escape(e.text)}</pre></details>`).join('')}`;
+${[...this.events].reverse().map(e => `<details><summary>${escape(e.type)} · <small>${escape(e.time)}</small></summary><pre>${escape(e.text)}</pre></details>`).join('')}
+<h2>Provider web transactions</h2><p>Diagnostic page activity only. These entries are not model replies. Sensitive URL and JSON fields are redacted. Full history is saved in transactions.jsonl.</p>
+${[...this.transactions].reverse().map(e => `<details><summary>${escape(e.kind)}${e.status !== undefined ? ` · ${escape(e.status)}` : ''} · <small>${escape(e.time)}</small></summary><pre>${escape(JSON.stringify(e, null, 2))}</pre></details>`).join('')}`;
     const tmp = this.file + '.tmp';
     fs.writeFileSync(tmp, html, { mode: 0o600 });
     fs.renameSync(tmp, this.file);
   }
   start(page) {
     this.page = page;
+    this.transactionRecorder = new ProviderTransactionRecorder(
+      event => this.recordTransaction(event),
+      () => this.activeProviderCallId,
+    );
+    this.transactionRecorder.start(page);
     this.timer = setInterval(() => this.capture(), 2000);
     this.timer.unref();
     this.capture();
@@ -96,6 +132,7 @@ ${[...this.events].reverse().map(e => `<details><summary>${escape(e.type)} · <s
   }
   stop() {
     clearInterval(this.timer);
+    this.transactionRecorder?.stop();
     this.server?.close();
     this.stopped = true;
     this.record('status', 'Browser closed');

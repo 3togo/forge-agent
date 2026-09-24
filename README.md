@@ -106,10 +106,67 @@ Log in independently, then use the Yuanbao agent in AionUI:
 node src/index.js --login --model=yuanbao
 ```
 
-The login window closes when the site is ready and credentials are saved.
+With no valid session, the command first opens Yuanbao headlessly, extracts the
+WeChat QR from its cross-origin login frame, and displays it in a Forge-owned QR
+window. The window refreshes in place and closes automatically on success,
+timeout, error, or fallback. Keep the command running until Yuanbao confirms the scan. If QR
+extraction is unavailable, Forge falls back to the guided visible-browser login
+for WeChat, Phone, or QQ. Existing valid credentials are refreshed headlessly.
+Forge reports the exact credential file saved for new AionUI chats.
+To deliberately sign in with a different Yuanbao account, bypass both the saved
+credential and persistent browser profile:
+
+```bash
+forge-agent --login --model=yuanbao --force-relogin
+```
+
+### Forge agents tray controller
+
+Start the optional desktop tray controller with:
+
+```bash
+forge-agent-tray
+# or, from a source checkout
+npm run tray
+```
+
+The tray manages DeepSeek, Doubao, and Yuanbao from one menu. It shows live
+login status for all three agents, selects the active agent, opens each provider,
+and starts normal or forced login flows with per-provider logs. Yuanbao's safe
+web model choices (Hy4 preview, Hy3, and DeepSeek) remain available as a
+provider-specific submenu and are applied before the next Yuanbao message.
+DeepSeek and Doubao each expose a safe provider-default/deep-thinking selector
+that is applied before their next message.
+Provider-native agents, Skills, and Deep Research are intentionally not exposed
+because those features run outside Forge's local workspace and permission
+boundary.
+
+The forced login uses a disposable fresh profile and first writes the previous
+credential to `yuanbao.json.backup` with owner-only permissions. A failed or
+timed-out login automatically restores that backup; a successful login keeps the
+backup and replaces `yuanbao.json` only after Yuanbao confirms the new session.
 AionUI chats run in a background browser without stealing focus. Each chat
 reports a local monitor file: open it to watch screenshots, exact browser
 prompts, replies, and errors. See [login and monitoring](docs/AIONUI.md#login-and-browser-ownership).
+
+Yuanbao, Doubao, and DeepSeek receive the shared `forge-workspace-v1` execution
+contract. They cannot directly operate on the AionUI project or treat a
+provider cloud workspace as that project. Instead they emit namespaced operations such
+as `forge.workspace.read`, `forge.workspace.search`, and
+`forge.workspace.command`; Forge executes them against AionUI's selected host
+workspace using the same permission checks as other models. Search is backed by
+local `rg` when available. Provider-native agents, shells, code interpreters,
+and Deep Search execution are rejected rather than accepted as local results.
+
+Run the opt-in live workspace smoke test with:
+
+```bash
+npm run smoke:yuanbao-workspace
+```
+
+It restores the saved Yuanbao login headlessly, creates a temporary read-only
+fixture, and verifies the complete namespaced local-search round trip. It does
+not perform interactive login or retain the temporary workspace.
 
 ## Setting Up the Doubao (豆包) Agent
 

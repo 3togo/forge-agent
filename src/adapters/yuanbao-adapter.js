@@ -6,6 +6,8 @@ const logger      = require('../logger');
 const { Errors }  = require('../errors');
 const { withSendRetry, withResponseRetry } = require('../retry');
 const { ThinkingTracker, formatThinkingForLog } = require('../thinking');
+const { YuanbaoPreferences } = require('../yuanbao-preferences');
+const { applyYuanbaoEngine } = require('../yuanbao-web-options');
 
 const YUANBAO_URL = 'https://yuanbao.tencent.com/chat';
 
@@ -117,6 +119,33 @@ class YuanbaoAdapter extends BaseAdapter {
     return Boolean(await this._findComposer());
   }
 
+  /** Open Yuanbao's real authentication panel for the dedicated login flow. */
+  async prepareLogin() {
+    const visibleLoginPanel = this.page.locator(
+      '.hyc-login__dialog:visible, [class*="login-dialog"]:visible, [class*="login-modal"]:visible'
+    );
+    if (await visibleLoginPanel.count()) return true;
+
+    const triggers = [
+      '.agent-dialogue__tool__login',
+      'button:has-text("Log In")',
+      'button:has-text("登录")',
+      '.yb-nav__user:has-text("Not logged in")',
+      '.yb-nav__user:has-text("未登录")',
+    ];
+    for (const selector of triggers) {
+      try {
+        const trigger = this.page.locator(selector).first();
+        if (await trigger.isVisible()) {
+          await trigger.click({ timeout: 3000 });
+          await this.page.waitForTimeout(500);
+          return true;
+        }
+      } catch {}
+    }
+    return false;
+  }
+
   // ── Override: sendMessage ───────────────────────────────────────────────────
   //
   // Yuanbao uses a Quill contenteditable editor. The base class _typeText
@@ -127,20 +156,10 @@ class YuanbaoAdapter extends BaseAdapter {
   async sendMessage(text) {
     process.stderr.write(`[forge-acp] yuanbao.sendMessage: starting, text="${text?.slice(0, 80)}", isFirst=${this._isFirstMessage}\n`);
     await withSendRetry(async () => {
-      let fullText = text;
-
-      if (this._isFirstMessage) {
-        const { buildSystemPrompt } = require('../system-prompt');
-        const systemPrompt = buildSystemPrompt({
-          projectContext: this._projectContext || '',
-          profile       : this.config.ACTIVE_PROFILE || 'default',
-          planMode      : this.config.PLANNING_MODE   || false,
-          workingDir    : this.config.WORKING_DIR     || process.cwd(),
-        });
-        fullText = systemPrompt + '\n\n════════════════════════════════\nUSER TASK:\n' + text;
-      }
-
-      const input = await this._prepareInput(fullText);
+      await this._applyTrayPreferences();
+      // Agent.run already supplies the complete first-turn contract. Prepending
+      // another generic prompt here gave Yuanbao contradictory execution roles.
+      const input = await this._prepareInput(text);
       if (!input) {
         process.stderr.write(`[forge-acp] yuanbao.sendMessage: input not found, failure=${this._inputFailure}\n`);
         throw Object.assign(Errors.inputNotFound(), {
@@ -270,6 +289,16 @@ class YuanbaoAdapter extends BaseAdapter {
         throw err;
       }
 
+      if (await this._hasNativeAgentResponse(final)) {
+        const err = new Error(
+          'Yuanbao attempted provider-native OneAgent/Deep Search execution in Tencent\'s remote environment. ' +
+          'Forge stopped the turn; no local workspace result was accepted.'
+        );
+        err.retryable = false;
+        err.providerNativeTool = true;
+        throw err;
+      }
+
       const cleaned = this._cleanText(final);
 
       if (!cleaned || cleaned.trim().length === 0) {
@@ -381,6 +410,22 @@ class YuanbaoAdapter extends BaseAdapter {
 
   // ── Yuanbao-specific helpers ─────────────────────────────────────────────────
 
+  async _applyTrayPreferences() {
+    try {
+      if (typeof this.page.locator !== 'function') return;
+      const preferenceStore = new YuanbaoPreferences();
+      if (!preferenceStore.exists()) return;
+      const selected = preferenceStore.load();
+      if (this._trayPreferenceSignature === selected.engine) return;
+      const applied = await applyYuanbaoEngine(this.page, selected.engine);
+      if (applied) this._trayPreferenceSignature = selected.engine;
+    } catch (error) {
+      // Page controls are provider-owned and may change independently. A stale
+      // mapping must never prevent the agent from using the composer.
+      logger.warn(`Could not apply Yuanbao tray engine preference: ${error.message}`);
+    }
+  }
+
   async _findComposer() {
     for (const selector of ['.ql-editor[contenteditable="true"]', ...this.selectors.chatInput]) {
       const candidates = this.page.locator(`${selector}:visible:is(textarea, input, [contenteditable="true"]):not([disabled]):not([readonly])`);
@@ -399,33 +444,45 @@ class YuanbaoAdapter extends BaseAdapter {
     const hasComposer = Boolean(composer);
 
     // Yuanbao shows a composer even when not logged in.
-    // Check for login dialog or "Not logged in" text to detect actual login state.
+    // Only classify a visible dialog as authentication UI when its class or text
+    // is login-specific. Yuanbao also uses TDesign dialogs for promotions and
+    // onboarding; treating every `.t-dialog__position` as login blocks valid
+    // restored sessions.
     const isLoggedIn = await this.page.evaluate(() => {
       const body = document.body?.textContent || '';
       if (body.includes('Not logged in')) return false;
-      // Check for login dialog overlay
-      const loginDialog = document.querySelector('.t-dialog__position, [class*="login-dialog"], [class*="login-modal"]');
-      if (loginDialog && loginDialog.getClientRects().length > 0 && getComputedStyle(loginDialog).visibility !== 'hidden') return false;
-      // Check for visible login prompt text
-      const loginTexts = ['请登录', '登录后', 'Log In', 'Sign in'];
-      for (const t of loginTexts) {
-        if (body.includes(t)) {
-          // Make sure it's not just a button label — check if there's a dialog
-          const dialog = document.querySelector('[class*="dialog"], [class*="modal"], [class*="portal"]');
-          if (dialog) return false;
+
+      const visible = el => {
+        const style = getComputedStyle(el);
+        return el.getClientRects().length > 0 && style.display !== 'none' &&
+          style.visibility !== 'hidden' && style.opacity !== '0';
+      };
+      const loginText = /Not logged in|请登录|登录后|扫码登录|二维码登录|\bLog In\b|\bSign in\b/i;
+      const dialogs = document.querySelectorAll(
+        '[role="dialog"], .t-dialog__position, [class*="login-dialog"], [class*="login-modal"]'
+      );
+      for (const dialog of dialogs) {
+        if (!visible(dialog)) continue;
+        const className = String(dialog.className || '');
+        if (/login[-_]?dialog|login[-_]?modal/i.test(className) || loginText.test(dialog.textContent || '')) {
+          return false;
         }
       }
       return true;
     });
 
     const ready = hasComposer && isLoggedIn;
-    process.stderr.write(`[forge-acp] yuanbao.isReady: ${ready} (composer=${hasComposer}, loggedIn=${isLoggedIn})\n`);
+    if (ready) await this._dismissOverlays();
+    if (!this.config.LOGIN_QUIET) {
+      process.stderr.write(`[forge-acp] yuanbao.isReady: ${ready} (composer=${hasComposer}, loggedIn=${isLoggedIn})\n`);
+    }
     return ready;
   }
 
   async _dismissOverlays() {
     const overlaySelectors = [
       '[role="dialog"]',
+      '.t-dialog__position',
       '[class*="modal-overlay"]',
       '[class*="popup"]',
       'button:has-text("知道了")',
@@ -672,6 +729,40 @@ class YuanbaoAdapter extends BaseAdapter {
 
       return getFullText(clone) || clone.textContent?.trim() || null;
     });
+  }
+
+  async _hasNativeAgentResponse(responseText = '') {
+    // Expert mode labels every answer as deep_search_agent, including a plain
+    // text forge_request. The envelope alone is not evidence that Yuanbao ran
+    // a provider tool. A valid request must be allowed back to Forge.
+    if (/<forge_request>[\s\S]*"protocol"\s*:\s*"forge-workspace-v1"[\s\S]*<\/forge_request>/i.test(responseText)) {
+      return false;
+    }
+    return Boolean(await this.page.evaluate(() => {
+      const visible = el => {
+        const style = getComputedStyle(el);
+        return el.getClientRects().length > 0 && style.display !== 'none' && style.visibility !== 'hidden';
+      };
+      const rows = [...document.querySelectorAll(
+        '.agent-chat__list__item--ai, .agent-chat__bubble--ai, ' +
+        '[data-message-role="assistant"], [data-role="assistant"], [data-testid*="assistant-message"]'
+      )].filter(visible);
+      const last = rows.reverse().find(el => el.textContent?.trim());
+      if (!last) return false;
+      const isExpertEnvelope = Boolean(last.querySelector(
+        '.hyc-component-deep-search-agent, [class*="deep-search-agent"], [data-speech-type="deep_search_agent"]'
+      ));
+      if (!isExpertEnvelope) return false;
+
+      const nativeTool = last.querySelector(
+        '[data-tool-name*="bash" i], [data-tool-name*="shell" i], [data-tool-name*="terminal" i], ' +
+        '[data-tool*="bash" i], [data-tool*="shell" i], [data-tool*="terminal" i], ' +
+        '[class*="command-card" i], [class*="terminal" i], [class*="code-interpreter" i]'
+      );
+      const text = last.textContent || '';
+      const nativeTrace = /\/data\/workspace|\bcubebox\b|已运行\s*\d+\s*次命令|运行命令|executed?\s+\d*\s*commands?|terminal command/i.test(text);
+      return Boolean(nativeTool || nativeTrace);
+    }));
   }
 }
 

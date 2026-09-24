@@ -6,43 +6,8 @@ const { spawnSync } = require('child_process');
 const { SUPPORTED_MODELS, getModelDisplayName } = require('./adapter-factory');
 
 const FORGE_ACP_PATH = path.join(__dirname, '..', 'forge-agent-acp');
-const ICONS_SRC_DIR = path.join(__dirname, '..', 'assets', 'icons');
-
-function getAionUiCustomAssetsDir() {
-  return path.join(os.homedir(), '.config', 'AionUi', 'aionui', 'custom-assets', 'logos', 'forge');
-}
-
-function getAionUiAssetsBaseUrl() {
-  return '/api/assets/logos/forge';
-}
-
-function installIcons() {
-  const destDir = getAionUiCustomAssetsDir();
-  const results = [];
-  try {
-    fs.mkdirSync(destDir, { recursive: true });
-    for (const model of SUPPORTED_MODELS) {
-      const srcPath = path.join(ICONS_SRC_DIR, `${model}.svg`);
-      if (!fs.existsSync(srcPath)) {
-        results.push({ model, status: 'skipped', reason: 'no source SVG' });
-        continue;
-      }
-      const destPath = path.join(destDir, `${model}.svg`);
-      fs.copyFileSync(srcPath, destPath);
-      results.push({ model, status: 'installed', path: destPath });
-    }
-  } catch (err) {
-    results.push({ model: 'all', status: 'error', reason: err.message });
-  }
-  return results;
-}
 
 function getIconPath(model) {
-  const destDir = getAionUiCustomAssetsDir();
-  const destPath = path.join(destDir, `${model}.svg`);
-  if (fs.existsSync(destPath)) {
-    return `${getAionUiAssetsBaseUrl()}/${model}.svg`;
-  }
   const meta = MODEL_META[model];
   return meta ? meta.icon : `emoji:❓`;
 }
@@ -52,10 +17,12 @@ function getAionUiDbPath() {
 }
 
 const MODEL_META = {
-  deepseek: { name: 'DeepSeek (Forge)', icon: '/api/assets/logos/forge/deepseek.svg', description: 'DeepSeek via Forge browser adapter' },
-  doubao: { name: 'Doubao (Forge)', icon: '/api/assets/logos/forge/doubao.svg', description: 'Doubao (豆包) via Forge browser adapter' },
-  gemini: { name: 'Gemini (Forge)', icon: '/api/assets/logos/forge/gemini.svg', description: 'Gemini via Forge browser adapter' },
-  yuanbao: { name: 'Yuanbao (Forge)', icon: '/api/assets/logos/forge/yuanbao.svg', description: 'Yuanbao (元宝) via Forge browser adapter' },
+  // Use the product icons published by each provider. AionUI accepts HTTPS
+  // image URLs, while its /api/assets/logos route only serves bundled assets.
+  deepseek: { name: 'DeepSeek (Forge)', icon: 'https://fe-static.deepseek.com/chat/favicon.svg', description: 'DeepSeek via Forge browser adapter' },
+  doubao: { name: 'Doubao (Forge)', icon: 'https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/favicon/new-doubao/128x128.png', description: 'Doubao (豆包) via Forge browser adapter' },
+  gemini: { name: 'Gemini (Forge)', icon: 'https://www.gstatic.com/lamda/images/gemini_sparkle_4g_512_lt_f94943af3be039176192d.png', description: 'Gemini via Forge browser adapter' },
+  yuanbao: { name: 'Yuanbao (Forge)', icon: 'https://static.yuanbao.tencent.com/m/yuanbao-web/favicon_new@32.png', description: 'Yuanbao (元宝) via Forge browser adapter' },
 };
 
 function findAionUiDb(override) {
@@ -89,8 +56,6 @@ function registerAcpAgents(dbPath, models) {
   const command = getForgeAcpCommand();
   const now = Date.now();
   const results = [];
-
-  installIcons();
 
   for (const model of models) {
     const meta = MODEL_META[model];
@@ -182,17 +147,6 @@ async function register(options = {}) {
 
   process.stderr.write(`Registering ${models.join(', ')} as ${mode} agents in AionUi...\n`);
 
-  if (mode === 'acp') {
-    const iconResults = installIcons();
-    for (const r of iconResults) {
-      if (r.status === 'installed') {
-        process.stderr.write(`  ✓ icon: ${r.model} → ${r.path}\n`);
-      } else if (r.status === 'error') {
-        process.stderr.write(`  ✗ icon: ${r.reason}\n`);
-      }
-    }
-  }
-
   let results;
   if (mode === 'acp') {
     results = registerAcpAgents(dbPath, models);
@@ -257,5 +211,5 @@ module.exports = {
   findAionUiDb, isAionUiRunning, getForgeAcpCommand,
   registerAcpAgents, unregisterAcpAgents, listRegisteredAgents, registerApiProviders,
   MODEL_META, getAionUiDbPath, FORGE_ACP_PATH,
-  installIcons, getIconPath, getAionUiCustomAssetsDir, getAionUiAssetsBaseUrl,
+  getIconPath,
 };

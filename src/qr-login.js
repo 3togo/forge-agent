@@ -5,7 +5,7 @@ const fs = require('fs');
 const path = require('path');
 const os = require('os');
 const crypto = require('crypto');
-const { spawnSync } = require('child_process');
+const { spawn, spawnSync } = require('child_process');
 const logger = require('./logger');
 
 const QR_IMAGE_DIR = path.join(os.homedir(), '.deepseek-agent', 'qr-login');
@@ -65,6 +65,69 @@ function findQrTool() {
   return null;
 }
 
+const QR_POPUP_SCRIPT = String.raw`
+import os, sys, tkinter as tk
+image_path, model = sys.argv[1], sys.argv[2]
+root = tk.Tk()
+root.title('Forge Agent — ' + model + ' login')
+root.resizable(False, False)
+tk.Label(root, text='Scan with WeChat to log in', font=('Sans', 14, 'bold'), padx=24, pady=14).pack()
+label = tk.Label(root, padx=24, pady=8)
+label.pack()
+tk.Label(root, text='This window closes automatically after login.\nYou can also close it to continue in the terminal.', padx=24, pady=14).pack()
+state = {'mtime': None, 'image': None}
+def refresh():
+    try:
+        mtime = os.stat(image_path).st_mtime_ns
+        if mtime != state['mtime']:
+            image = tk.PhotoImage(file=image_path)
+            label.configure(image=image)
+            state['image'] = image
+            state['mtime'] = mtime
+    except (OSError, tk.TclError):
+        pass
+    root.after(500, refresh)
+refresh()
+root.mainloop()
+`;
+
+class QrPopupController {
+  constructor(options = {}) {
+    this.spawnProcess = options.spawnProcess || spawn;
+    this.pythonBin = options.pythonBin || 'python3';
+    this.child = null;
+  }
+
+  open(imagePath, model) {
+    if (this.child && this.child.exitCode === null && !this.child.killed) return true;
+    if (process.platform !== 'win32' && !process.env.DISPLAY && !process.env.WAYLAND_DISPLAY) return false;
+    try {
+      const child = this.spawnProcess(this.pythonBin, ['-c', QR_POPUP_SCRIPT, imagePath, model], {
+        stdio: 'ignore',
+      });
+      this.child = child;
+      child.once?.('error', error => {
+        if (this.child === child) this.child = null;
+        logger.dim(`QR popup unavailable: ${error.message}`);
+      });
+      child.once?.('exit', () => { if (this.child === child) this.child = null; });
+      return true;
+    } catch (error) {
+      this.child = null;
+      logger.dim(`QR popup unavailable: ${error.message}`);
+      return false;
+    }
+  }
+
+  close() {
+    const child = this.child;
+    this.child = null;
+    if (child && child.exitCode === null && !child.killed) {
+      try { child.kill('SIGTERM'); } catch {}
+    }
+  }
+}
+
 class QrLoginManager {
   constructor(page, model, options = {}) {
     this.page = page;
@@ -76,9 +139,13 @@ class QrLoginManager {
     this.qrImagePath = null;
     this.pythonBin = options.pythonBin || findPython();
     this.qrBin = options.qrBin || findQrTool();
+    this.isLoginSuccess = options.isLoginSuccess || null;
+    this.popup = options.popup || new QrPopupController();
+    this.lastFailure = null;
   }
 
   async tryQrLogin(onQrReady) {
+    this.lastFailure = null;
     for (let attempt = 0; attempt < 3; attempt++) {
       if (attempt > 0) {
         logger.dim(`QR login retry ${attempt + 1}/3...`);
@@ -99,10 +166,12 @@ class QrLoginManager {
 
       const loggedIn = await this._waitForLoginWithRefresh(qrElement, onQrReady);
       this._cleanup();
+      if (!loggedIn) this.lastFailure = 'timeout';
       return loggedIn;
     }
 
     logger.dim('No QR code element found after 3 attempts');
+    this.lastFailure = 'unavailable';
     return false;
   }
 
@@ -122,18 +191,28 @@ class QrLoginManager {
   }
 
   async _detectQrElement() {
-    for (const selector of QR_SELECTORS) {
-      try {
-        const element = await this.page.$(selector);
-        if (element) {
-          const visible = await element.isVisible();
-          const box = await element.boundingBox();
-          if (visible && box && box.width > 50 && box.height > 50) {
-            logger.dim(`Found QR code element: ${selector} (${Math.round(box.width)}x${Math.round(box.height)})`);
-            return element;
+    // Yuanbao embeds the WeChat QR inside a cross-origin iframe. Playwright can
+    // inspect that frame directly even though page.$() cannot cross the boundary.
+    const scopes = [this.page];
+    try {
+      if (typeof this.page.frames === 'function') scopes.push(...this.page.frames().slice(1));
+    } catch {}
+    for (const scope of scopes) {
+      for (const selector of QR_SELECTORS) {
+        try {
+          const elements = typeof scope.$$ === 'function'
+            ? await scope.$$(selector)
+            : [await scope.$(selector)].filter(Boolean);
+          for (const element of elements) {
+            const visible = await element.isVisible();
+            const box = await element.boundingBox();
+            if (visible && box && box.width > 50 && box.height > 50) {
+              logger.dim(`Found QR code element: ${selector} (${Math.round(box.width)}x${Math.round(box.height)})`);
+              return element;
+            }
           }
-        }
-      } catch {}
+        } catch {}
+      }
     }
 
     try {
@@ -285,22 +364,10 @@ if results:
   }
 
   _openQrImage() {
-    const openCommands = {
-      linux: ['xdg-open'],
-      darwin: ['open'],
-      win32: ['cmd', '/c', 'start'],
-    };
-    const [cmd, ...args] = openCommands[process.platform] || [];
-    if (cmd) {
-      try {
-        spawnSync(cmd, [...args, this.qrImagePath], { detached: true, stdio: 'ignore' });
-        logger.info(`QR code image opened: ${this.qrImagePath}`);
-      } catch {
-        logger.info(`QR code image saved: ${this.qrImagePath}`);
-      }
-    } else {
-      logger.info(`QR code image saved: ${this.qrImagePath}`);
-    }
+    const opened = this.popup.open(this.qrImagePath, this.model);
+    logger.info(opened
+      ? `Forge QR window opened: ${this.qrImagePath}`
+      : `QR code image saved: ${this.qrImagePath}`);
   }
 
   async _waitForLoginWithRefresh(qrElement, onQrReady) {
@@ -350,6 +417,7 @@ if results:
   }
 
   async _isLoginSuccess() {
+    if (this.isLoginSuccess) return Boolean(await this.isLoginSuccess());
     const inputSelectors = ['textarea', 'div[contenteditable="true"]', '.ProseMirror'];
     for (const sel of inputSelectors) {
       try {
@@ -361,6 +429,7 @@ if results:
   }
 
   _cleanup() {
+    this.popup.close();
     if (this.qrImagePath) {
       try { fs.unlinkSync(this.qrImagePath); } catch {}
       this.qrImagePath = null;
@@ -368,4 +437,7 @@ if results:
   }
 }
 
-module.exports = { QrLoginManager, QR_IMAGE_DIR, QR_SELECTORS, QR_TAB_SELECTORS, findPython, findQrTool };
+module.exports = {
+  QrLoginManager, QrPopupController, QR_IMAGE_DIR, QR_SELECTORS, QR_TAB_SELECTORS,
+  findPython, findQrTool,
+};

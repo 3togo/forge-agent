@@ -9,7 +9,7 @@ const {
   findAionUiDb, isAionUiRunning, getForgeAcpCommand,
   registerAcpAgents, unregisterAcpAgents, listRegisteredAgents, registerApiProviders,
   register, unregister, list, MODEL_META,
-  installIcons, getIconPath, getAionUiCustomAssetsDir,
+  getIconPath,
 } = require('../src/aionui-register');
 
 const SCHEMA_AGENT_METADATA = `CREATE TABLE agent_metadata (id TEXT PRIMARY KEY, agent_id TEXT UNIQUE NOT NULL, name TEXT, description TEXT, backend TEXT, agent_type TEXT, agent_source TEXT, enabled INTEGER, command TEXT, args TEXT, env TEXT, icon TEXT, name_i18n TEXT, description_i18n TEXT, agent_source_info TEXT, native_skills_dirs TEXT, behavior_policy TEXT, yolo_id TEXT, agent_capabilities TEXT, auth_methods TEXT, config_options TEXT, available_modes TEXT, available_models TEXT, available_commands TEXT, sort_order INTEGER, command_override TEXT, env_override TEXT, created_at INTEGER, updated_at INTEGER, skill_delivery TEXT, user_id TEXT);`;
@@ -404,58 +404,22 @@ describe('idempotency', () => {
   });
 });
 
-describe('installIcons', () => {
-  let temp, home;
-  beforeEach(() => {
-    temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-icons-'));
-    home = jest.spyOn(os, 'homedir').mockReturnValue(temp);
-  });
-  afterEach(() => {
-    home.mockRestore();
-    fs.rmSync(temp, { recursive: true, force: true });
-  });
-  test('creates custom-assets directory and copies SVG files', () => {
-    const results = installIcons();
-    const destDir = getAionUiCustomAssetsDir();
-    expect(fs.existsSync(destDir)).toBe(true);
-    for (const model of ['deepseek', 'doubao', 'gemini', 'yuanbao']) {
-      const destPath = path.join(destDir, `${model}.svg`);
-      expect(fs.existsSync(destPath)).toBe(true);
-    }
-    expect(results.every(r => r.status === 'installed')).toBe(true);
-  });
-  test('is idempotent (running twice does not fail)', () => {
-    installIcons();
-    const results = installIcons();
-    expect(results.every(r => r.status === 'installed')).toBe(true);
-  });
-});
-
 describe('getIconPath', () => {
-  let temp, home;
-  beforeEach(() => {
-    temp = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-iconpath-'));
-    home = jest.spyOn(os, 'homedir').mockReturnValue(temp);
+  test('returns the official product icon for a supported model', () => {
+    expect(getIconPath('deepseek')).toBe('https://fe-static.deepseek.com/chat/favicon.svg');
   });
-  afterEach(() => {
-    home.mockRestore();
-    fs.rmSync(temp, { recursive: true, force: true });
-  });
-  test('returns SVG path after installIcons', () => {
-    installIcons();
-    const iconPath = getIconPath('deepseek');
-    expect(iconPath).toBe('/api/assets/logos/forge/deepseek.svg');
-  });
-  test('returns emoji fallback when icons not installed', () => {
-    const iconPath = getIconPath('deepseek');
-    expect(iconPath).toBe(MODEL_META.deepseek.icon);
+  test('returns an emoji fallback for an unsupported model', () => {
+    expect(getIconPath('unknown')).toBe('emoji:❓');
   });
 });
 
 describe('MODEL_META icon paths', () => {
-  test('all models use SVG path format', () => {
-    for (const model of ['deepseek', 'doubao', 'gemini', 'yuanbao']) {
-      expect(MODEL_META[model].icon).toMatch(/^\/api\/assets\/logos\/forge\/.+\.svg$/);
-    }
+  test('uses the official product icons', () => {
+    expect(Object.fromEntries(Object.entries(MODEL_META).map(([model, meta]) => [model, meta.icon]))).toEqual({
+      deepseek: 'https://fe-static.deepseek.com/chat/favicon.svg',
+      doubao: 'https://lf-flow-web-cdn.doubao.com/obj/flow-doubao/favicon/new-doubao/128x128.png',
+      gemini: 'https://www.gstatic.com/lamda/images/gemini_sparkle_4g_512_lt_f94943af3be039176192d.png',
+      yuanbao: 'https://static.yuanbao.tencent.com/m/yuanbao-web/favicon_new@32.png',
+    });
   });
 });

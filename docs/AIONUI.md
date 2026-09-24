@@ -102,10 +102,29 @@ Log in separately before using Yuanbao in AionUI:
 node src/index.js --login --model=yuanbao
 ```
 
-This opens a dedicated login browser profile, waits up to three minutes for site
-readiness, saves credentials, and closes the window. No task is sent and no Enter
-key is required. Running it again checks the website even when saved credentials
-exist. After renewing login, start a new AionUI chat.
+With no valid session, this starts Yuanbao headlessly, extracts the WeChat QR from
+its embedded login frame, displays it in a Forge-owned window, and waits up to three
+minutes for the scan. Keep the command running while scanning. QR refreshes update
+the same window; Forge closes it on success, timeout, error, or fallback. If extraction is unavailable, Forge opens the guided
+visible-browser login for WeChat, Phone, or QQ. Existing valid credentials are
+verified and refreshed quietly without opening a window. It reports verification
+and the exact credential file before closing. No task is sent and no Enter key is
+required. After renewing login, start a new AionUI chat. Login orchestration does not
+read or write the credential format directly: `CredentialStore` is the single
+load/save boundary, while the login command only decides when a verified browser
+session should be persisted.
+
+To switch accounts or require a genuinely fresh login, use:
+
+```bash
+forge-agent --login --model=yuanbao --force-relogin
+```
+
+This skips saved-session verification and uses a temporary clean browser profile.
+Before login, Forge atomically copies the current credential to
+`yuanbao.json.backup` with mode `0600`. Failure automatically restores the backup;
+success keeps it as the immediately previous credential. The temporary profile is
+removed when the command exits.
 
 AionUI workers run headlessly, including when credentials are missing or expired.
 They never initiate QR login or open an authentication window. If the page is not
@@ -131,9 +150,14 @@ node src/browser-monitor.js /absolute/path/to/monitor/index.html
 
 Open the localhost URL printed by that command; Ctrl+C stops the archive viewer.
 
-The adjacent `events.jsonl` preserves the full event history and can also be
-watched with `tail -f`. These owner-only local files contain chat content and
-screenshots; delete the session's `monitor` directory when no longer needed.
+The adjacent `events.jsonl` preserves the logical agent input/output history and
+can also be watched with `tail -f`. `transactions.jsonl` separately records
+redacted provider-page requests, responses, failures, console warnings, and page
+errors. Each chat-completion call has a correlation ID so the Yuanbao web traffic
+can be debugged without treating it as an API response or model reply. Static
+assets are omitted, secret-looking URL/JSON fields are redacted, and request
+bodies are bounded. These owner-only local files still contain chat content;
+delete the session's `monitor` directory when no longer needed.
 A force-killed worker may leave the last snapshot without a closed status; check
 the displayed timestamp. To inspect an actual browser window deliberately, set
 `FORGE_ACP_HEADED=1` in the custom agent environment. This does not enable login
@@ -161,6 +185,13 @@ another conversation.
   updates, permission requests, and cancellation. Text and resource links are
   accepted. A resource link is passed as a reference, not automatically fetched.
 - Worker processes bind config and tools to the selected workspace.
+- Yuanbao, Doubao, and DeepSeek use the namespaced `forge-workspace-v1` contract. The web model may
+  reason about the task, but only Forge can read, search, write, or run commands
+  in the AionUI-selected host workspace. `forge.workspace.search` uses local
+  ripgrep when installed and falls back to Forge's portable file search. Generic
+  provider-native `bash`, agents, code interpreters, Deep Search, and cloud-workspace activity
+  are not treated as host execution; provider-native agent output fails the turn
+  closed. No AionUI symlink or project copy is required.
 - Tool start/result events and bounded text-file diffs appear in the client.
   Final answers appear when Forge finishes; token-by-token answer streaming is
   not implemented.
@@ -177,6 +208,12 @@ another conversation.
   Decline, cancellation, connection errors, and unrecognized responses never
   grant approval. A decline ends the turn.
   Saved terminal permissions do not bypass these GUI approvals.
+- Shell-command approvals offer the same chat and persistent project scopes.
+  Selecting **Allow shell commands for this chat** stops repeat prompts in the
+  current conversation; **Allow always: shell commands in this project** also
+  survives agent restarts. Because shell syntax can hide side effects inside an
+  apparently read-only command, Forge does not guess that commands such as
+  `ls` are safe; the user must explicitly select one of these broader scopes.
 - File-path checks and strict workspace mode apply to file tools. Approved shell
   commands still run as your Linux user; this is not an OS sandbox.
 - Cancel and disconnect stop the worker and tracked child processes, including

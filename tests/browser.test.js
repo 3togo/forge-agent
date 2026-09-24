@@ -293,12 +293,18 @@ describe('screenshot()', () => {
 describe('browser monitoring integration', () => {
   test('records exact outgoing prompt and completed provider reply', async () => {
     const browser = makeBrowser();
-    browser.monitor = { record: jest.fn() };
+    browser.monitor = {
+      record: jest.fn(),
+      beginProviderCall: jest.fn().mockReturnValue('provider-call-1'),
+      endProviderCall: jest.fn(),
+    };
     await browser.sendMessage('exact\n<prompt>');
     await browser.waitForResponse();
     expect(browser.monitor.record).toHaveBeenCalledWith('input', 'exact\n<prompt>');
     expect(browser.monitor.record).toHaveBeenCalledWith('status', 'Input sent');
     expect(browser.monitor.record).toHaveBeenCalledWith('output', 'response');
+    expect(browser.monitor.beginProviderCall).toHaveBeenCalledWith('chat.completion');
+    expect(browser.monitor.endProviderCall).toHaveBeenCalledWith('provider-call-1', 'completed');
   });
   test('response error is recorded and rethrown instead of reporting a reply', async () => {
     const browser = makeBrowser();

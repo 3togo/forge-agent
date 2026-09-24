@@ -7,6 +7,7 @@ const config       = require('./config');
 const logger       = require('./logger');
 const { Errors }   = require('./errors');
 const { getAdapter, getModelUrl } = require('./adapter-factory');
+const { CredentialStore } = require('./credential-store');
 const { runHealthCheck } = require('./health');
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -14,18 +15,23 @@ const { runHealthCheck } = require('./health');
 // ─────────────────────────────────────────────────────────────────────────────
 
 class DeepSeekBrowser {
-  constructor() {
+  constructor(options = {}) {
     this.context  = null;
     this.page     = null;
     this._closed  = false;
     this.adapter  = null;
+    this.credentialStore = options.credentialStore || null;
+    this.quiet = options.quiet === true;
+    this._providerCallId = null;
   }
 
   // ── Lifecycle ──────────────────────────────────────────────────────────────
 
   async launch() {
-    logger.info(`Launching browser for ${config.MODEL} with persistent session...`);
-    process.stderr.write(`[forge-acp] browser.launch: model=${config.MODEL}, headless=${config.HEADLESS}, minimized=${config.BROWSER_MINIMIZED}, sessionDir=${config.SESSION_DIR}, acpAuthFile=${config.ACP_AUTH_FILE}\n`);
+    if (!this.quiet) {
+      logger.info(`Launching browser for ${config.MODEL} with persistent session...`);
+      process.stderr.write(`[forge-acp] browser.launch: model=${config.MODEL}, headless=${config.HEADLESS}, minimized=${config.BROWSER_MINIMIZED}, sessionDir=${config.SESSION_DIR}, acpAuthFile=${config.ACP_AUTH_FILE}\n`);
+    }
 
     const sessionDir = path.resolve(config.SESSION_DIR);
 
@@ -53,8 +59,11 @@ class DeepSeekBrowser {
       ignoreDefaultArgs: ['--enable-automation'],
     });
 
-    if (config.ACP_AUTH_FILE) {
-      try { await require('./browser-auth').restoreAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
+    if (!this.credentialStore && config.ACP_AUTH_FILE) {
+      this.credentialStore = CredentialStore.forModel(config.MODEL, { file: config.ACP_AUTH_FILE });
+    }
+    if (this.credentialStore) {
+      try { await this.credentialStore.restore(this.context); }
       catch (err) { logger.warn(`Could not restore saved login: ${err.message}`); }
     }
 
@@ -75,7 +84,7 @@ class DeepSeekBrowser {
 
     await this._checkLoginAndAttemptQr();
 
-    logger.success('Browser ready!');
+    if (!this.quiet) logger.success('Browser ready!');
   }
 
   async close() {
@@ -130,8 +139,8 @@ class DeepSeekBrowser {
       const result = await qrLogin.tryQrLogin();
       if (result) {
         logger.success('QR login successful!');
-        if (config.ACP_AUTH_FILE) {
-          try { await require('./browser-auth').saveAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
+        if (this.credentialStore) {
+          try { await this.credentialStore.save(this.context); }
           catch (err) { logger.warn(`Could not save login: ${err.message}`); }
         }
       }
@@ -183,6 +192,7 @@ class DeepSeekBrowser {
     process.stderr.write(`[forge-acp] browser.sendMessage: model=${config.MODEL}, text="${text?.slice(0, 80)}"\n`);
 
     this.monitor?.record('input', text);
+    this._providerCallId = this.monitor?.beginProviderCall?.('chat.completion') || null;
     try {
       const result = await this.adapter.sendMessage(text);
       this.monitor?.record('status', 'Input sent');
@@ -196,8 +206,12 @@ class DeepSeekBrowser {
         await this.page.waitForTimeout(3000);
 
         try {
-          return await this.adapter.sendMessage(text);
+          const result = await this.adapter.sendMessage(text);
+          this.monitor?.record('status', 'Input sent after retry');
+          return result;
         } catch (secondErr) {
+          this.monitor?.endProviderCall?.(this._providerCallId, 'failed', secondErr.message);
+          this._providerCallId = null;
           process.stderr.write(`[forge-acp] browser.sendMessage: second error: ${secondErr.message}\n`);
           try {
             const debugPath = `/tmp/forge-selector-debug-${config.MODEL}-${Date.now()}.png`;
@@ -208,6 +222,8 @@ class DeepSeekBrowser {
           throw secondErr;
         }
       }
+      this.monitor?.endProviderCall?.(this._providerCallId, 'failed', firstErr.message);
+      this._providerCallId = null;
       throw firstErr;
     }
   }
@@ -219,13 +235,17 @@ class DeepSeekBrowser {
     try {
       response = await this.adapter.waitForResponse();
       this.monitor?.record('output', response);
+      this.monitor?.endProviderCall?.(this._providerCallId, 'completed');
+      this._providerCallId = null;
     } catch (err) {
       this.monitor?.record('response error', err.message);
+      this.monitor?.endProviderCall?.(this._providerCallId, 'failed', err.message);
+      this._providerCallId = null;
       throw err;
     }
     process.stderr.write(`[forge-acp] browser.waitForResponse: got response, length=${response?.length || 0}\n`);
-    if (config.ACP_AUTH_FILE) {
-      try { await require('./browser-auth').saveAuth(this.context, config.ACP_AUTH_FILE, getModelUrl(config.MODEL)); }
+    if (this.credentialStore) {
+      try { await this.credentialStore.save(this.context); }
       catch (err) { logger.warn(`Could not save login for new chats: ${err.message}`); }
     }
     return response;

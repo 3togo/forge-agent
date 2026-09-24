@@ -6,6 +6,8 @@ const logger      = require('../logger');
 const { Errors }  = require('../errors');
 const { withSendRetry, withResponseRetry } = require('../retry');
 const { ThinkingTracker, formatThinkingForLog } = require('../thinking');
+const { ProviderWebPreferences } = require('../provider-web-preferences');
+const { applyProviderMode } = require('../provider-web-options');
 
 /**
  * Adapter for chat.deepseek.com
@@ -13,6 +15,7 @@ const { ThinkingTracker, formatThinkingForLog } = require('../thinking');
 class DeepSeekAdapter extends BaseAdapter {
   constructor(page, config) {
     super(page, config);
+    this._lastTextBefore = '';
     this._ensureThinkingTracker();
     this.selectors = {
       chatInput: [
@@ -78,6 +81,7 @@ class DeepSeekAdapter extends BaseAdapter {
 
   async sendMessage(text) {
     await withSendRetry(async () => {
+      await this._applyProviderPreferences();
       const { el, isTextarea } = await this._findInput();
 
       await el.click({ force: true });
@@ -97,6 +101,8 @@ class DeepSeekAdapter extends BaseAdapter {
           element.dispatchEvent(new InputEvent('input', { bubbles: true, data: content }));
         }, el, text);
       }
+
+      this._lastTextBefore = await this._extractLastMessage() || '';
 
       const sendDelayMs = this.config.SEND_DELAY || 1_500;
       const startPoll = Date.now();
@@ -119,8 +125,9 @@ class DeepSeekAdapter extends BaseAdapter {
     return withResponseRetry(async () => {
       const timeout     = this.config.RESPONSE_TIMEOUT === 0
         ? 24 * 60 * 60 * 1000
-        : this.config.RESPONSE_TIMEOUT;
-      const stableDelay = this.config.STABLE_DELAY;
+        : this.config.RESPONSE_TIMEOUT || 600_000;
+      const stableDelay = this.config.STABLE_DELAY || 1500;
+      const pollMs      = this.config.GENERATION_POLL || 800;
       const start       = Date.now();
 
       this._ensureThinkingTracker();
@@ -133,9 +140,13 @@ class DeepSeekAdapter extends BaseAdapter {
       let appeared = false;
 
       while (Date.now() - start < (this.config.APPEAR_TIMEOUT || 120_000)) {
+        const current = await this._extractLastMessage();
         const count = await this._getMessageCount();
-        if (count > initialCount) { appeared = true; break; }
-        await this.page.waitForTimeout(this.config.GENERATION_POLL || 800);
+        if ((current && current.trim() !== this._lastTextBefore.trim()) || count > initialCount) {
+          appeared = true;
+          break;
+        }
+        await this.page.waitForTimeout(pollMs);
       }
 
       if (!appeared) logger.warn('Response may have been delayed — continuing to wait...');
@@ -147,6 +158,10 @@ class DeepSeekAdapter extends BaseAdapter {
 
       while (Date.now() - start < timeout) {
         const text = await this._extractLastMessage();
+        if (!text || text.trim() === this._lastTextBefore.trim()) {
+          await this.page.waitForTimeout(pollMs);
+          continue;
+        }
 
         if (typeof this.thinkingTracker.update === 'function') {
           this.thinkingTracker.update(text);
@@ -174,7 +189,7 @@ class DeepSeekAdapter extends BaseAdapter {
           lastIndicatorUpdate = now;
         }
 
-        await this.page.waitForTimeout(this.config.GENERATION_POLL || 800);
+        await this.page.waitForTimeout(pollMs);
       }
 
       logger.clearThinking();
@@ -187,7 +202,23 @@ class DeepSeekAdapter extends BaseAdapter {
         }
       }
 
-      const final   = await this._extractLastMessage();
+      const final = await this._extractLastMessage();
+      if (!final || final.trim() === this._lastTextBefore.trim()) {
+        const err = Errors.responseTimeout(timeout);
+        err.retryable = true;
+        throw err;
+      }
+
+      if (await this._hasProviderNativeExecution(final)) {
+        const err = new Error(
+          'DeepSeek attempted provider-native execution. Forge stopped the turn; ' +
+          'no result outside the selected local workspace was accepted.'
+        );
+        err.retryable = false;
+        err.providerNativeTool = true;
+        throw err;
+      }
+
       const cleaned = this._cleanText(final);
 
       if (!cleaned || cleaned.trim().length === 0) {
@@ -230,6 +261,19 @@ class DeepSeekAdapter extends BaseAdapter {
 
   // ── Helpers ────────────────────────────────────────────────────────────────
 
+  async _applyProviderPreferences() {
+    try {
+      if (typeof this.page.locator !== 'function') return;
+      const store = new ProviderWebPreferences();
+      if (!store.exists()) return;
+      const mode = store.load().modes.deepseek;
+      if (this._providerPreferenceSignature === mode) return;
+      if (await applyProviderMode(this.page, 'deepseek', mode)) this._providerPreferenceSignature = mode;
+    } catch (error) {
+      logger.warn(`Could not apply DeepSeek mode preference: ${error.message}`);
+    }
+  }
+
   _getInputSelectors() { return this.selectors.chatInput; }
   _getSendSelectors() { return this.selectors.sendButton; }
   _getStopSelectors() { return this.selectors.stopButton; }
@@ -266,6 +310,38 @@ class DeepSeekAdapter extends BaseAdapter {
       try {
         const el = await this.page.$(sel);
         if (el && await el.isVisible()) return true;
+      } catch {}
+    }
+    return false;
+  }
+
+  async isReady() {
+    if (!await this.isLoginSuccess()) return false;
+    return !await this.page.evaluate(() => {
+      const visible = el => {
+        const style = getComputedStyle(el);
+        return el.getClientRects().length > 0 && style.display !== 'none' &&
+          style.visibility !== 'hidden' && style.opacity !== '0';
+      };
+      const loginText = /请登录|登录后|扫码登录|二维码登录|\bLog in\b|\bSign in\b/i;
+      return [...document.querySelectorAll('[role="dialog"], [class*="login-modal"], [class*="login-dialog"]')]
+        .some(el => visible(el) && loginText.test(el.textContent || ''));
+    });
+  }
+
+  async prepareLogin() {
+    const triggers = [
+      'button:has-text("登录")', 'button:has-text("Log in")',
+      '[class*="login-button"]', '[class*="login-btn"]', '[data-testid*="login"]',
+    ];
+    for (const selector of triggers) {
+      try {
+        const trigger = this.page.locator(selector).first();
+        if (await trigger.isVisible()) {
+          await trigger.click({ timeout: 3000 });
+          await this.page.waitForTimeout(500);
+          return true;
+        }
       } catch {}
     }
     return false;

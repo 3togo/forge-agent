@@ -54,6 +54,13 @@ describe('real agent loop ACP execution hook', () => {
     await expect(instance.run('hello')).rejects.toBe(error);
     expect(instance.browser.sendMessage).toHaveBeenCalledTimes(1);
   });
+  test('non-retryable provider responses surface without a generic protocol nudge', async () => {
+    const error = Object.assign(new Error('provider-native execution rejected'), { retryable: false });
+    const instance = agent({ executeTool: jest.fn(), conversationalReplies: true });
+    instance.browser.waitForResponse.mockReset().mockRejectedValue(error);
+    await expect(instance.run('hello')).rejects.toBe(error);
+    expect(instance.browser.sendMessage).toHaveBeenCalledTimes(1);
+  });
   test.each(['Hello! How can I help?', '你好！有什么可以帮你？', 'Here is the answer.\nSecond paragraph.'])('ACP delivers a conversational reply without asking for tool formatting: %s', async reply => {
     const instance = agent({ executeTool: jest.fn(), conversationalReplies: true });
     instance.browser.waitForResponse.mockReset().mockResolvedValue(reply);
@@ -67,6 +74,20 @@ describe('real agent loop ACP execution hook', () => {
     const result = await instance.run('write a file');
     expect(hook).toHaveBeenCalledTimes(1);
     expect(result).toContain('Done');
+  });
+  test('executes namespaced workspace requests and returns namespaced results', async () => {
+    const hook = jest.fn().mockResolvedValue({ content: 'hello' });
+    const instance = agent({ executeTool: hook, conversationalReplies: true });
+    instance.browser.waitForResponse.mockReset()
+      .mockResolvedValueOnce('<forge_request>{"protocol":"forge-workspace-v1","operation":"forge.workspace.read","arguments":{"path":"README.md"}}</forge_request>')
+      .mockResolvedValueOnce('Read complete.');
+
+    expect(await instance.run('read it')).toBe('Read complete.');
+    expect(hook).toHaveBeenCalledWith('read_file', { path: 'README.md' });
+    const feedback = instance.browser.sendMessage.mock.calls[1][0];
+    expect(feedback).toContain('<forge_result>');
+    expect(feedback).toContain('"operation":"forge.workspace.read"');
+    expect(feedback).not.toContain('[TOOL RESULT:');
   });
   test('a project question returns the answer after reading a file without formatting retries', async () => {
     fs.writeFileSync(path.join(temp, 'README.md'), 'This project handles television schedules.');

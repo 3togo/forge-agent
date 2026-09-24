@@ -10,6 +10,7 @@ class FakeAgent {
       return 'Written';
     }
     if (text === 'command') return await this.options.executeTool('run_command', { command: 'sleep 30', timeout: 60000 });
+    if (text === 'list') return await this.options.executeTool('run_command', { command: 'printf listed' });
     if (text === 'test') return await this.options.executeTool('run_tests', {});
     if (text === 'escape') return await this.options.executeTool('write_file', { path: '../outside.txt', content: 'bad' });
     if (text === 'profile') return process.env.FORGE_ACP_SESSION_DIR;

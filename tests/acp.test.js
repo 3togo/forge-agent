@@ -67,6 +67,13 @@ describe('ACP worker lifecycle', () => {
     expect(await server.prompt(prompt(sid, 'cwd'))).toEqual({ stopReason: 'end_turn' });
     expect(updates.some(x => x.content?.text === temp)).toBe(true);
   });
+  test('allows absolute Unix paths but still rejects actual terminal slash commands', async () => {
+    const absolutePath = '/home/polin/gitee/j_bin/bin';
+    expect(await server.prompt(prompt(sid, absolutePath))).toEqual({ stopReason: 'end_turn' });
+    expect(updates.some(x => x.content?.text === absolutePath)).toBe(true);
+    await expect(server.prompt(prompt(sid, '/help'))).rejects.toThrow('Terminal slash commands');
+    await expect(server.prompt(prompt(sid, '/model yuanbao'))).rejects.toThrow('Terminal slash commands');
+  });
   test('chat approval skips later writes but expires in a new chat', async () => {
     conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-chat' } });
     await server.prompt(prompt(sid, 'write'));
@@ -79,7 +86,7 @@ describe('ACP worker lifecycle', () => {
     await server.prompt(prompt(sid, 'write'));
     expect(conn.requestPermission).toHaveBeenCalledTimes(2);
   });
-  test('always approval persists for this project, but excludes commands and other projects', async () => {
+  test('file-write approval persists for this project, but excludes shell commands and other projects', async () => {
     conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-always' } });
     await server.prompt(prompt(sid, 'write'));
     const directory = path.join(temp, 'permissions');
@@ -91,10 +98,10 @@ describe('ACP worker lifecycle', () => {
     conn.requestPermission.mockClear();
     await server.prompt(prompt(sid, 'write'));
     expect(conn.requestPermission).not.toHaveBeenCalled();
-    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-always' } });
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'deny' } });
     await server.prompt(prompt(sid, 'test'));
     expect(conn.requestPermission).toHaveBeenCalledTimes(1);
-    expect(conn.requestPermission.mock.calls[0][0].options.map(o => o.optionId)).toEqual(['allow', 'deny']);
+    expect(conn.requestPermission.mock.calls[0][0].options.map(o => o.optionId)).toEqual(['allow', 'project-chat', 'project-always', 'deny']);
     expect(updates.some(u => u.content?.text?.includes('Permission declined'))).toBe(true);
     const other = path.join(temp, 'other'); fs.mkdirSync(other);
     const next = (await server.newSession({ cwd: other })).sessionId;
@@ -102,6 +109,29 @@ describe('ACP worker lifecycle', () => {
     await server.prompt(prompt(next, 'write'));
     expect(conn.requestPermission).toHaveBeenCalledTimes(2);
     expect(fs.existsSync(path.join(other, 'proof.txt'))).toBe(false);
+  });
+  test('shell approval can cover this chat or persist for this project', async () => {
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-chat' } });
+    await server.prompt(prompt(sid, 'list'));
+    await server.prompt(prompt(sid, 'list'));
+    expect(conn.requestPermission).toHaveBeenCalledTimes(1);
+    expect(conn.requestPermission.mock.calls[0][0].options.map(o => o.name)).toEqual([
+      'Allow once', 'Allow shell commands for this chat',
+      'Allow always: shell commands in this project', 'Decline',
+    ]);
+
+    await server.close();
+    server = new AcpServer(conn, { workerFile: path.join(__dirname, 'fixtures/acp-worker.cjs'), permissionStateDir: path.join(temp, 'permissions') });
+    server.initialize(); sid = (await server.newSession({ cwd: temp })).sessionId;
+    conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-always' } });
+    await server.prompt(prompt(sid, 'list'));
+    await server.close();
+
+    server = new AcpServer(conn, { workerFile: path.join(__dirname, 'fixtures/acp-worker.cjs'), permissionStateDir: path.join(temp, 'permissions') });
+    server.initialize(); sid = (await server.newSession({ cwd: temp })).sessionId;
+    conn.requestPermission.mockClear();
+    await server.prompt(prompt(sid, 'list'));
+    expect(conn.requestPermission).not.toHaveBeenCalled();
   });
   test('project approval still rejects paths outside the workspace', async () => {
     conn.requestPermission.mockResolvedValue({ outcome: { outcome: 'selected', optionId: 'project-chat' } });

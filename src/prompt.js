@@ -16,6 +16,15 @@ const {
 // ─────────────────────────────────────────────
 
 function buildSystemPrompt(profileName = 'default', profileAddition = '') {
+  const executionContract = require('./forge-execution-contract');
+  if (executionContract.usesForgeExecutionContract(config.MODEL)) {
+    const { getModelDisplayName } = require('./adapter-factory');
+    return executionContract.buildForgeExecutionContract({
+      workingDir: config.WORKING_DIR,
+      profileAddition,
+      provider: getModelDisplayName(config.MODEL),
+    });
+  }
   const toolDocs = getToolDescriptions();
   const cwd      = config.WORKING_DIR;
   const platform = os.platform() + ' ' + os.release();
@@ -146,11 +155,16 @@ class ConversationManager {
   buildFirstMessage(task, workingDirListing, profileName = 'default', profileAddition = '') {
     this._systemPrompt = buildSystemPrompt(profileName, profileAddition);
 
+    const usesForgeContract = require('./forge-execution-contract')
+      .usesForgeExecutionContract(config.MODEL);
+    const listOperation = usesForgeContract
+      ? 'forge.workspace.list'
+      : 'list_directory';
     const dirContext = workingDirListing
-      ? '\nCURRENT WORKING DIRECTORY CONTENTS:\n' + workingDirListing + '\n\n' +
-        'NOTE: The directory listing above is already complete and current.\n' +
-        'Do NOT call list_directory as your first action — use the listing\n' +
-        'already provided above. Only call list_directory again later if you\n' +
+      ? '\nFORGE-VERIFIED CURRENT WORKING DIRECTORY CONTENTS:\n' + workingDirListing + '\n\n' +
+        'NOTE: Forge supplied the complete current directory listing above.\n' +
+        `Do NOT call ${listOperation} as your first action — use the listing\n` +
+        `already provided above. Only call ${listOperation} again later if you\n` +
         'have since created or modified files and need to verify the result.\n'
       : '';
 
@@ -192,6 +206,13 @@ class ConversationManager {
     ].join('\n');
 
     this.messages.push({ role: 'user', content: content });
+    return content;
+  }
+
+  addForgeResult(operation, result, isError) {
+    const content = require('./forge-execution-contract')
+      .formatForgeResult(operation, result, isError);
+    this.messages.push({ role: 'user', content });
     return content;
   }
 

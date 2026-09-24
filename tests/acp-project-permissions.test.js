@@ -2,7 +2,7 @@
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { hasProjectWrites, saveProjectWrites } = require('../src/acp-project-permissions');
+const { hasProjectPermission, saveProjectPermission, hasProjectWrites, saveProjectWrites } = require('../src/acp-project-permissions');
 
 describe('project write grants', () => {
   let directory;
@@ -25,5 +25,11 @@ describe('project write grants', () => {
     expect(hasProjectWrites(directory, '/project/a')).toBe(false);
     fs.writeFileSync(file, JSON.stringify({ workspace: '/project/b', allowFileWrites: true }));
     expect(hasProjectWrites(directory, '/project/a')).toBe(false);
+  });
+  test('merges independent file-write and shell-command grants', () => {
+    saveProjectPermission(directory, '/project/a', 'allowFileWrites');
+    saveProjectPermission(directory, '/project/a', 'allowShellCommands');
+    expect(hasProjectPermission(directory, '/project/a', 'allowFileWrites')).toBe(true);
+    expect(hasProjectPermission(directory, '/project/a', 'allowShellCommands')).toBe(true);
   });
 });

@@ -6,7 +6,20 @@ const os = require('os');
 const { randomUUID } = require('crypto');
 const { fork } = require('child_process');
 const { stopWorker, descendants, identity } = require('./acp-process');
-const { hasProjectWrites, saveProjectWrites } = require('./acp-project-permissions');
+const { hasProjectPermission, saveProjectPermission } = require('./acp-project-permissions');
+
+const PERMISSION_SCOPES = {
+  file_write: {
+    recordKey: 'allowFileWrites',
+    chatName: 'Allow project file writes for this chat',
+    alwaysName: 'Allow always: file writes in this project',
+  },
+  shell_exec: {
+    recordKey: 'allowShellCommands',
+    chatName: 'Allow shell commands for this chat',
+    alwaysName: 'Allow always: shell commands in this project',
+  },
+};
 
 class AcpServer {
   constructor(connection, options = {}) {
@@ -72,7 +85,11 @@ class AcpServer {
     if (this.options.sessionDir && this.owner && this.owner !== sessionId) throw new Error('Another conversation owns this connection’s explicit browser profile. Use a new agent connection.');
     if (!prompt.length || prompt.some(b => !['text', 'resource_link'].includes(b.type))) throw new Error('Only text and resource links are supported.');
     const text = prompt.map(b => b.type === 'text' ? b.text : `${b.name || 'Resource'}: ${b.uri}`).join('\n');
-    if (text.trimStart().startsWith('/')) throw new Error('Terminal slash commands are not supported in ACP mode.');
+    // Reject terminal commands such as `/help` and `/model yuanbao`, but do not
+    // mistake an absolute Unix path (`/home/...`) for a slash command.
+    if (/^\/[a-z][a-z0-9_-]*(?:\s|$)/i.test(text.trimStart())) {
+      throw new Error('Terminal slash commands are not supported in ACP mode.');
+    }
     if (this.options.sessionDir) this.owner = sessionId;
     session.busy = true;
     try {
@@ -100,7 +117,7 @@ class AcpServer {
   spawn(session) {
     const model = this.options.model || 'doubao';
     const sessionDir = this.options.sessionDir || path.join(os.homedir(), '.deepseek-agent', 'acp-profiles', model, session.id);
-    const authFile = this.options.sessionDir ? '' : path.join(os.homedir(), '.deepseek-agent', 'acp-auth', `${model}.json`);
+    const authFile = this.options.sessionDir ? '' : require('./credential-store').credentialFileForModel(model);
     process.stderr.write(`[forge-acp] server: spawning worker with model=${model}, sessionDir=${sessionDir}, authFile=${authFile}, workspace=${session.cwd}\n`);
     const worker = fork(this.options.workerFile || path.join(__dirname, 'acp-worker.js'), [], {
       cwd: session.cwd, detached: process.platform !== 'win32',
@@ -141,8 +158,12 @@ class AcpServer {
     else if (event.type === 'message') await this.message(session, event.text);
     else if (event.type === 'permission') {
       const directory = this.options.permissionStateDir || path.join(os.homedir(), '.deepseek-agent', 'acp-permissions');
-      const projectWrite = event.projectWrite === true;
-      if (projectWrite && (session.allowFileWrites || hasProjectWrites(directory, session.cwd))) {
+      // projectWrite is retained as a fallback for older workers during upgrades.
+      const category = event.permissionCategory || (event.projectWrite === true ? 'file_write' : null);
+      const scope = PERMISSION_SCOPES[category];
+      session.allowedProjectPermissions ||= new Set();
+      if (scope && (session.allowedProjectPermissions.has(category) ||
+          hasProjectPermission(directory, session.cwd, scope.recordKey))) {
         if (session.worker?.connected) session.worker.send({ type: 'permission', id: event.id, allow: true });
         return;
       }
@@ -150,18 +171,18 @@ class AcpServer {
       this.connection.requestPermission({
         sessionId: session.id, toolCall: event.toolCall,
         options: [{ optionId: 'allow', name: 'Allow once', kind: 'allow_once' },
-          ...(projectWrite ? [
-            { optionId: 'project-chat', name: 'Allow project file writes for this chat', kind: 'allow_always' },
-            { optionId: 'project-always', name: 'Allow always: file writes in this project', kind: 'allow_always' },
+          ...(scope ? [
+            { optionId: 'project-chat', name: scope.chatName, kind: 'allow_always' },
+            { optionId: 'project-always', name: scope.alwaysName, kind: 'allow_always' },
           ] : []),
           { optionId: 'deny', name: 'Decline', kind: 'reject_once' }],
       }).then(reply => {
         if (session.cancelled || this.closed || !session.worker?.connected) return;
         const selected = reply.outcome?.outcome === 'selected' ? reply.outcome.optionId : null;
-        if (projectWrite && selected === 'project-always') saveProjectWrites(directory, session.cwd);
-        if (projectWrite && ['project-chat', 'project-always'].includes(selected)) session.allowFileWrites = true;
+        if (scope && selected === 'project-always') saveProjectPermission(directory, session.cwd, scope.recordKey);
+        if (scope && ['project-chat', 'project-always'].includes(selected)) session.allowedProjectPermissions.add(category);
         session.worker.send({ type: 'permission', id: event.id,
-          allow: selected === 'allow' || (projectWrite && ['project-chat', 'project-always'].includes(selected)) });
+          allow: selected === 'allow' || (scope && ['project-chat', 'project-always'].includes(selected)) });
       }).catch(() => {
         if (!session.cancelled && session.worker?.connected) session.worker.send({ type: 'permission', id: event.id, allow: false });
       });

@@ -130,6 +130,32 @@ describe('Model Adapters', () => {
     test('getModelUrl is correct', () => {
       expect(adapter.getModelUrl()).toBe('https://yuanbao.tencent.com/chat');
     });
+
+    test('sends the supplied Forge contract once without prepending another prompt', async () => {
+      const input = { press: jest.fn() };
+      adapter._prepareInput = jest.fn().mockResolvedValue(input);
+      adapter._getLastAssistantText = jest.fn().mockResolvedValue('');
+      adapter._clickSendButton = jest.fn().mockResolvedValue(true);
+      const contract = 'FORGE CONTRACT\n<forge_request>example</forge_request>';
+
+      await adapter.sendMessage(contract);
+
+      expect(adapter._prepareInput).toHaveBeenCalledTimes(1);
+      expect(adapter._prepareInput).toHaveBeenCalledWith(contract);
+    });
+  });
+
+  test('Doubao sends a supplied Forge contract without a second adapter prompt', async () => {
+    const adapter = new DoubaoAdapter(mockPage, mockConfig);
+    const input = { press: jest.fn() };
+    adapter._prepareInput = jest.fn().mockResolvedValue(input);
+    adapter._getLastAssistantText = jest.fn().mockResolvedValue('');
+    adapter._clickSendButton = jest.fn().mockResolvedValue(true);
+    const contract = 'FORGE CONTRACT\n<forge_request>example</forge_request>';
+
+    await adapter.sendMessage(contract);
+
+    expect(adapter._prepareInput).toHaveBeenCalledWith(contract);
   });
 
   describe('AdapterFactory', () => {

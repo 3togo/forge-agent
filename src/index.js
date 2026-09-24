@@ -95,6 +95,7 @@ function parseArgs(argv) {
     testModel: null,
     acp        : false,
     login      : false,
+    forceRelogin: false,
     };
 
     let i = 0;
@@ -120,6 +121,7 @@ function parseArgs(argv) {
       case '--no-tui':      opts.noTui       = true;    break;
       case '--acp':         opts.acp         = true;    break;
       case '--login':       opts.login       = true;    break;
+      case '--force-relogin': opts.forceRelogin = true; break;
       case '--compact':     opts.compact     = true;    break;
       case '--no-memory':   opts.noMemory    = true;    break;
       case '--no-cache':    opts.noCache     = true;    break;
@@ -333,6 +335,7 @@ ${c('1;36', 'CONFIGURATION')}
 ${c('1;36', 'AUTHENTICATION')}
       --login            Open browser to log in and save credentials
       --login --model=<name>  Log in for a specific model
+      --force-relogin    Ignore the saved session and request a fresh login
 
 ${c('1;36', 'DEBUGGING')}
       --debug            Verbose output with raw AI responses
@@ -1271,14 +1274,15 @@ async function main() {
   }
 
   // ── Login ────────────────────────────────────────────────────────────────
+  if (args.forceRelogin && !args.login) {
+    logger.error('--force-relogin must be used with --login.');
+    process.exit(1);
+  }
   if (args.login) {
     try {
       const modelName = args.model || config.MODEL;
-      const { getModelDisplayName } = require('./adapter-factory');
-      console.log(`Opening separate login browser for ${getModelDisplayName(modelName)}...`);
       const { login } = require('./browser-login');
-      const authFile = await login(modelName);
-      console.log(`Login saved: ${authFile}\nStart a new AionUI chat to use it.`);
+      await login(modelName, { forceRelogin: args.forceRelogin });
       process.exit(0);
     } catch (err) {
       logger.error(`Login failed: ${err.message}`);

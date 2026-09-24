@@ -6,6 +6,8 @@ const logger      = require('../logger');
 const { Errors }  = require('../errors');
 const { withSendRetry, withResponseRetry } = require('../retry');
 const { ThinkingTracker, formatThinkingForLog } = require('../thinking');
+const { ProviderWebPreferences } = require('../provider-web-preferences');
+const { applyProviderMode } = require('../provider-web-options');
 
 const DOUBAO_URL = 'https://www.doubao.com/chat';
 
@@ -107,7 +109,25 @@ class DoubaoAdapter extends BaseAdapter {
   }
 
   async isLoginSuccess() {
-    return Boolean(await this._findComposer());
+    return await this.isReady();
+  }
+
+  async prepareLogin() {
+    const triggers = [
+      'button:has-text("登录")', 'button:has-text("Log in")',
+      '[class*="login-button"]', '[class*="login-btn"]', '[data-testid*="login"]',
+    ];
+    for (const selector of triggers) {
+      try {
+        const trigger = this.page.locator(selector).first();
+        if (await trigger.isVisible()) {
+          await trigger.click({ timeout: 3000 });
+          await this.page.waitForTimeout(500);
+          return true;
+        }
+      } catch {}
+    }
+    return false;
   }
 
   // ── Override: sendMessage ───────────────────────────────────────────────────
@@ -119,20 +139,10 @@ class DoubaoAdapter extends BaseAdapter {
 
   async sendMessage(text) {
     await withSendRetry(async () => {
-      let fullText = text;
-
-      if (this._isFirstMessage) {
-        const { buildSystemPrompt } = require('../system-prompt');
-        const systemPrompt = buildSystemPrompt({
-          projectContext: this._projectContext || '',
-          profile       : this.config.ACTIVE_PROFILE || 'default',
-          planMode      : this.config.PLANNING_MODE   || false,
-          workingDir    : this.config.WORKING_DIR     || process.cwd(),
-        });
-        fullText = systemPrompt + '\n\n════════════════════════════════\nUSER TASK:\n' + text;
-      }
-
-      const input = await this._prepareInput(fullText);
+      await this._applyProviderPreferences();
+      // Agent.run supplies the complete first-turn contract. Adding an adapter
+      // prompt here duplicates and can contradict that contract.
+      const input = await this._prepareInput(text);
       if (!input) {
         throw Object.assign(Errors.inputNotFound(), {
           acpBrowserRecoverable: true,
@@ -263,6 +273,16 @@ class DoubaoAdapter extends BaseAdapter {
         throw err;
       }
 
+      if (await this._hasProviderNativeExecution(final)) {
+        const err = new Error(
+          'Doubao attempted provider-native execution. Forge stopped the turn; ' +
+          'no result outside the selected local workspace was accepted.'
+        );
+        err.retryable = false;
+        err.providerNativeTool = true;
+        throw err;
+      }
+
       const cleaned = this._cleanText(final);
 
       if (!cleaned || cleaned.trim().length === 0) {
@@ -379,6 +399,19 @@ class DoubaoAdapter extends BaseAdapter {
    * instead of click()+type(), and verify the text was correctly written
    * before allowing Enter to be pressed.
    */
+  async _applyProviderPreferences() {
+    try {
+      if (typeof this.page.locator !== 'function') return;
+      const store = new ProviderWebPreferences();
+      if (!store.exists()) return;
+      const mode = store.load().modes.doubao;
+      if (this._providerPreferenceSignature === mode) return;
+      if (await applyProviderMode(this.page, 'doubao', mode)) this._providerPreferenceSignature = mode;
+    } catch (error) {
+      logger.warn(`Could not apply Doubao mode preference: ${error.message}`);
+    }
+  }
+
   async _findComposer() {
     for (const selector of ['.ProseMirror[contenteditable="true"]', ...this.selectors.chatInput]) {
       const candidates = this.page.locator(`${selector}:visible:is(textarea, input, [contenteditable="true"]):not([disabled]):not([readonly])`);
@@ -392,11 +425,24 @@ class DoubaoAdapter extends BaseAdapter {
   }
 
   async isReady() {
-    await this._dismissOverlays();
-    return Boolean(await this._findComposer());
+    await this._dismissOverlays({ preserveLogin: true });
+    const composer = await this._findComposer();
+    if (!composer) return false;
+    const loginRequired = await this.page.evaluate(() => {
+      const visible = el => {
+        const style = getComputedStyle(el);
+        return el.getClientRects().length > 0 && style.display !== 'none' &&
+          style.visibility !== 'hidden' && style.opacity !== '0';
+      };
+      const loginText = /请登录|登录后|扫码登录|二维码登录|\bLog in\b|\bSign in\b/i;
+      return [...document.querySelectorAll('[role="dialog"], [class*="login-modal"], [class*="login-dialog"]')]
+        .some(el => visible(el) && loginText.test(el.textContent || ''));
+    });
+    if (loginRequired) return false;
+    return true;
   }
 
-  async _dismissOverlays() {
+  async _dismissOverlays({ preserveLogin = false } = {}) {
     const overlaySelectors = [
       '[role="dialog"]',
       '.semi-modal-content',
@@ -412,6 +458,15 @@ class DoubaoAdapter extends BaseAdapter {
       try {
         const el = await this.page.$(sel);
         if (el && await el.isVisible()) {
+          if (preserveLogin) {
+            const loginOverlay = await el.evaluate(node => {
+              const text = node.textContent || '';
+              const className = String(node.className || '');
+              return /请登录|登录后|扫码登录|二维码登录|\bLog in\b|\bSign in\b/i.test(text) ||
+                /login[-_]?(dialog|modal|panel)/i.test(className);
+            }).catch(() => false);
+            if (loginOverlay) continue;
+          }
           if (sel.includes('button')) {
             await el.click();
           } else {

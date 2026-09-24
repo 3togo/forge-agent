@@ -6,16 +6,19 @@
   "bin": {
     "forge-agent-acp": "src/acp-entry.js",
     "forge-agent": "src/index.js",
-    "fa": "src/index.js"
+    "fa": "src/index.js",
+    "forge-agent-tray": "src/yuanbao-tray-cli.js"
   },
   "scripts": {
     "start": "node src/index.js",
+    "tray": "electron src/yuanbao-tray/main.js",
     "postinstall": "node src/postinstall.js",
     "debug": "node src/index.js --debug",
     "calibrate": "node src/calibrate.js",
     "test": "jest --runInBand",
     "test:watch": "jest --watch --runInBand",
     "test:coverage": "jest --coverage --runInBand",
+    "smoke:yuanbao-workspace": "./scripts/smoke-yuanbao-workspace.sh",
     "audit": "npm audit",
     "audit:fix": "npm audit fix"
   },
@@ -50,6 +53,9 @@
   },
   "devDependencies": {
     "jest": "^29.7.0"
+  },
+  "optionalDependencies": {
+    "electron": "^41.10.7"
   },
   "engines": {
     "node": ">=18.0.0"

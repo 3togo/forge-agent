@@ -17,6 +17,37 @@ describe('Parser Module', () => {
       expect(result.args.path).toBe('test.js');
     });
 
+    test('parses a namespaced Forge workspace request', () => {
+      const input = `<forge_request>
+{"protocol":"forge-workspace-v1","operation":"forge.workspace.search","arguments":{"pattern":"hello","directory":"src"}}
+</forge_request>`;
+      const result = parseResponse(input);
+      expect(result).toMatchObject({
+        type: 'tool_call',
+        name: 'workspace_search',
+        protocol: 'forge-workspace-v1',
+        operation: 'forge.workspace.search',
+        args: { pattern: 'hello', directory: 'src' },
+      });
+    });
+
+    test('rejects unknown Forge workspace operations', () => {
+      const input = `<forge_request>
+{"protocol":"forge-workspace-v1","operation":"forge.native.bash","arguments":{}}
+</forge_request>`;
+      expect(parseResponse(input)).toEqual({
+        type: 'error',
+        message: 'Unknown Forge operation: forge.native.bash.',
+      });
+    });
+
+    test('rejects the wrong Forge protocol version', () => {
+      const input = `<forge_request>
+{"protocol":"forge-workspace-v2","operation":"forge.workspace.read","arguments":{"path":"a.js"}}
+</forge_request>`;
+      expect(parseResponse(input).type).toBe('error');
+    });
+
     test('Case 2: Text before tool call', () => {
       const input = `I'll read the file first.
 <tool_call>
@@ -139,9 +170,14 @@ Please let me know if you need anything else.`;
     });
 
     test('hasToolCall works for all formats', () => {
+      expect(hasToolCall('<forge_request>')).toBe(true);
       expect(hasToolCall('<tool_call>')).toBe(true);
       expect(hasToolCall('```json\n{"tool":')).toBe(true);
       expect(hasToolCall('{"tool": "test"}')).toBe(true);
+    });
+
+    test('extracts leading text before a Forge request', () => {
+      expect(extractLeadingText('Reasoning\n<forge_request>{}</forge_request>')).toBe('Reasoning');
     });
 
     test('containsTaskComplete works for multiple variations', () => {

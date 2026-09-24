@@ -10,7 +10,10 @@ function main() {
   process.stderr.write(`[forge-acp] worker: env FORGE_ACP_MODEL=${process.env.FORGE_ACP_MODEL}, FORGE_ACP_AUTH_FILE=${process.env.FORGE_ACP_AUTH_FILE}, FORGE_ACP_SESSION_DIR=${process.env.FORGE_ACP_SESSION_DIR}\n`);
   const authFile = process.env.FORGE_ACP_AUTH_FILE || null;
   let hasValidAuth = false;
-  try { hasValidAuth = Boolean(authFile && require('./browser-auth').isAuthValid(authFile)); } catch {}
+  try {
+    hasValidAuth = Boolean(authFile && require('./credential-store').CredentialStore
+      .forModel(process.env.FORGE_ACP_MODEL, { file: authFile }).isValid());
+  } catch {}
   const forceHeaded = process.env.FORGE_ACP_HEADED === '1' || process.env.FORGE_ACP_HEADED === 'true';
   const headlessMode = !forceHeaded;
   process.stderr.write(`[forge-acp] worker: authFile=${authFile}, hasValidAuth=${hasValidAuth}, forceHeaded=${forceHeaded}, headlessMode=${headlessMode}\n`);
@@ -24,7 +27,7 @@ function main() {
   });
   process.stderr.write(`[forge-acp] worker: config.MODEL=${config.MODEL}, config.HEADLESS=${config.HEADLESS}, config.ACP_AUTH_FILE=${config.ACP_AUTH_FILE}\n`);
   const { executeTool } = require('./tools');
-  const { isReadOnly } = require('./permission-store');
+  const { isReadOnly, getCategory } = require('./permission-store');
   const approvals = new Map();
   let agent, stopping = false, busy = false;
 
@@ -75,7 +78,10 @@ function main() {
         const allow = await new Promise(resolve => {
           approvals.set(id, resolve);
           const projectWrite = ['write_file', 'append_to_file', 'replace_in_file', 'create_directory', 'write_files', 'patch_file'].includes(name);
-          send({ type: 'permission', id, toolCall, projectWrite });
+          const category = getCategory(name);
+          const permissionCategory = projectWrite ? 'file_write'
+            : (category === 'shell_exec' || name === 'run_tests' ? 'shell_exec' : null);
+          send({ type: 'permission', id, toolCall, projectWrite, permissionCategory });
         });
         if (!allow || stopping) {
           update({ sessionUpdate: 'tool_call_update', toolCallId: id, status: 'failed', content: [content('Declined; tool was not executed.')] });

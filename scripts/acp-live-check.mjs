@@ -35,6 +35,15 @@ try {
   fs.rmSync(preflightDir, { recursive: true, force: true });
 }
 const workspace = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-live-check-'));
+const workspaceContract = process.argv.includes('--workspace-contract');
+const workspaceSecret = `FORGE_WORKSPACE_SMOKE_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+if (workspaceContract) {
+  fs.writeFileSync(
+    path.join(workspace, 'forge-smoke-fixture.txt'),
+    `FORGE_SMOKE_SECRET=${workspaceSecret}\n`,
+    { mode: 0o600 }
+  );
+}
 const child = spawn(process.execPath, ['src/acp-entry.js', `--model=${model}`], {
   cwd: root, stdio: ['pipe', 'pipe', 'inherit'],
   env: { ...process.env, FORGE_ACP_HEADED: '0' },
@@ -57,7 +66,40 @@ const connection = new ClientSideConnection(() => ({
 const timer = setTimeout(() => child.kill('SIGTERM'), 300000);
 try {
   await connection.initialize({ protocolVersion: 1, clientCapabilities: {} });
-  for (let sessionIndex = 0; sessionIndex < 2; sessionIndex++) {
+  if (workspaceContract) {
+    const session = await connection.newSession({ cwd: workspace, mcpServers: [] });
+    messages = [];
+    const result = await connection.prompt({ sessionId: session.sessionId, prompt: [{
+      type: 'text',
+      text: [
+        'Workspace protocol smoke test.',
+        'Use forge.workspace.search to search the selected workspace for the literal FORGE_SMOKE_SECRET.',
+        'Do not use Yuanbao-native tools, bash, OneAgent, Deep Search, or /data/workspace.',
+        'After Forge returns the search result, reply with only the complete value after FORGE_SMOKE_SECRET=.',
+        'The value is not present in this prompt; do not guess it.',
+      ].join(' '),
+    }] });
+    assert.equal(result.stopReason, 'end_turn');
+    assert(messages.some(text => text.trim() === workspaceSecret),
+      'Final answer did not contain the secret read from the local workspace');
+
+    const monitorDir = path.join(os.homedir(), '.deepseek-agent', 'acp-profiles', model, session.sessionId, 'monitor');
+    const events = fs.readFileSync(path.join(monitorDir, 'events.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+    assert(events.some(e => e.type === 'output' && e.text.includes('<forge_request>') &&
+      e.text.includes('"operation":"forge.workspace.search"')),
+    'Yuanbao did not request forge.workspace.search');
+    assert(events.some(e => e.type === 'input' && e.text.includes('<forge_result>') && e.text.includes(workspaceSecret)),
+      'Forge did not return the local search result through forge_result');
+    assert(!events.some(e => e.type === 'output' && /\/data\/workspace|cubebox/i.test(e.text)),
+      'Provider output confused Tencent infrastructure with the selected workspace');
+    const transactionsPath = path.join(monitorDir, 'transactions.jsonl');
+    assert(fs.existsSync(transactionsPath), 'Provider transaction log was not created');
+    assert(fs.statSync(transactionsPath).size > 0, 'Provider transaction log is empty');
+    console.log(`MONITOR: ${path.join(monitorDir, 'index.html')}`);
+    console.log(`PASS: Yuanbao used forge.workspace.search against ${workspace}`);
+    console.log(`PASS: Forge returned the hidden fixture value and Yuanbao produced the exact final answer`);
+    console.log('PASS: provider transaction diagnostics were retained separately');
+  } else for (let sessionIndex = 0; sessionIndex < 2; sessionIndex++) {
     const session = await connection.newSession({ cwd: workspace, mcpServers: [] });
     for (let turn = 0; turn < (sessionIndex === 0 ? 2 : 1); turn++) {
       const marker = `FORGE_LIVE_OK_${sessionIndex}_${turn}`;

@@ -81,8 +81,8 @@ describe('Git tool registration', () => {
     GIT_TOOLS.forEach(name => expect(registered).toContain(name));
   });
 
-  test('total tool count is now 39', () => {
-    expect(Object.keys(TOOLS)).toHaveLength(39);
+  test('total tool count is now 40', () => {
+    expect(Object.keys(TOOLS)).toHaveLength(40);
   });
 
   test('each git tool has description, parameters, execute', () => {

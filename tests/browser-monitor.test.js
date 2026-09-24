@@ -84,3 +84,18 @@ test('saved preview surfaces show_info answer above collapsed screenshots and ra
   expect(html).toContain('Stopped — saved session');
   expect(html).toContain('<details><summary>input');
 });
+
+test('provider diagnostics use a separate correlated transaction log', () => {
+  directory = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-monitor-'));
+  const monitor = new BrowserMonitor(directory, 'yuanbao');
+  const id = monitor.beginProviderCall('chat.completion');
+  monitor.recordTransaction({ time: new Date().toISOString(), kind: 'http.response', providerCallId: id, status: 200 });
+  monitor.endProviderCall(id, 'completed');
+  monitor.stop();
+
+  const transactions = fs.readFileSync(path.join(directory, 'transactions.jsonl'), 'utf8').trim().split('\n').map(JSON.parse);
+  expect(transactions).toHaveLength(3);
+  expect(transactions.map(item => item.providerCallId)).toEqual([id, id, id]);
+  expect(fs.readFileSync(monitor.file, 'utf8')).toContain('These entries are not model replies');
+  expect(fs.statSync(path.join(directory, 'transactions.jsonl')).mode & 0o777).toBe(0o600);
+});

@@ -4,7 +4,7 @@ const fs = require('fs');
 const os = require('os');
 const path = require('path');
 const { spawnSync } = require('child_process');
-const { QrLoginManager, QR_SELECTORS, QR_TAB_SELECTORS, findPython, findQrTool } = require('../src/qr-login');
+const { QrLoginManager, QrPopupController, QR_SELECTORS, QR_TAB_SELECTORS, findPython, findQrTool } = require('../src/qr-login');
 const { isAuthValid, getAuthAge } = require('../src/browser-auth');
 
 describe('findPython', () => {
@@ -59,7 +59,7 @@ describe('findQrTool', () => {
 });
 
 describe('QrLoginManager', () => {
-  let page, manager, output;
+  let page, manager, output, popup;
 
   beforeEach(() => {
     page = {
@@ -67,9 +67,10 @@ describe('QrLoginManager', () => {
       waitForTimeout: jest.fn().mockResolvedValue(),
       url: jest.fn().mockReturnValue('https://chat.deepseek.com'),
     };
+    popup = { open: jest.fn().mockReturnValue(true), close: jest.fn() };
     manager = new QrLoginManager(page, 'deepseek', {
       timeout: 5000, pollInterval: 100, qrRefreshCheckInterval: 200,
-      pythonBin: '/fake/python', qrBin: '/fake/qr',
+      pythonBin: '/fake/python', qrBin: '/fake/qr', popup,
     });
     output = jest.spyOn(process.stderr, 'write').mockImplementation(() => true);
     spawnSync.mockReset();
@@ -116,6 +117,28 @@ describe('QrLoginManager', () => {
       page.$.mockResolvedValue(null);
       const result = await manager._detectQrElement();
       expect(result).toBeNull();
+    });
+    test('finds a Yuanbao WeChat QR inside a cross-origin frame', async () => {
+      const qr = {
+        isVisible: jest.fn().mockResolvedValue(true),
+        boundingBox: jest.fn().mockResolvedValue({ width: 160, height: 160 }),
+      };
+      const frame = { $: jest.fn(selector => selector.includes('img[class*="qr"]') ? qr : null) };
+      page.$.mockResolvedValue(null);
+      page.frames = jest.fn().mockReturnValue([page, frame]);
+      expect(await manager._detectQrElement()).toBe(qr);
+    });
+    test('skips hidden duplicate QR images before the visible WeChat QR', async () => {
+      const hidden = {
+        isVisible: jest.fn().mockResolvedValue(false),
+        boundingBox: jest.fn().mockResolvedValue(null),
+      };
+      const visible = {
+        isVisible: jest.fn().mockResolvedValue(true),
+        boundingBox: jest.fn().mockResolvedValue({ width: 160, height: 160 }),
+      };
+      page.$$ = jest.fn(selector => selector.includes('img[class*="qr"]') ? [hidden, visible] : []);
+      expect(await manager._detectQrElement()).toBe(visible);
     });
   });
 
@@ -167,6 +190,16 @@ describe('QrLoginManager', () => {
     });
   });
 
+  describe('_openQrImage', () => {
+    test('opens the QR in the owned popup and closes it during cleanup', () => {
+      manager.qrImagePath = '/tmp/yuanbao-qr.png';
+      manager._openQrImage();
+      expect(popup.open).toHaveBeenCalledWith('/tmp/yuanbao-qr.png', 'deepseek');
+      manager._cleanup();
+      expect(popup.close).toHaveBeenCalled();
+    });
+  });
+
   describe('_isLoginSuccess', () => {
     test('returns true when input element is visible', async () => {
       const el = { isVisible: jest.fn().mockResolvedValue(true) };
@@ -176,6 +209,12 @@ describe('QrLoginManager', () => {
     test('returns false when no input element found', async () => {
       page.$.mockResolvedValue(null);
       expect(await manager._isLoginSuccess()).toBe(false);
+    });
+    test('uses provider authentication callback when the logged-out page also has a composer', async () => {
+      manager.isLoginSuccess = jest.fn().mockResolvedValue(false);
+      page.$.mockResolvedValue({ isVisible: jest.fn().mockResolvedValue(true) });
+      expect(await manager._isLoginSuccess()).toBe(false);
+      expect(page.$).not.toHaveBeenCalled();
     });
   });
 
@@ -205,6 +244,27 @@ describe('QrLoginManager', () => {
       const result = await manager.tryQrLogin();
       expect(result).toBe(false);
     });
+  });
+});
+
+describe('QrPopupController', () => {
+  test('owns and terminates the popup process', () => {
+    const child = {
+      exitCode: null, killed: false, once: jest.fn(), kill: jest.fn(),
+    };
+    const spawnProcess = jest.fn().mockReturnValue(child);
+    const originalDisplay = process.env.DISPLAY;
+    process.env.DISPLAY = ':test';
+    try {
+      const popup = new QrPopupController({ spawnProcess, pythonBin: 'python3' });
+      expect(popup.open('/tmp/qr.png', 'yuanbao')).toBe(true);
+      expect(spawnProcess).toHaveBeenCalledWith('python3', expect.any(Array), { stdio: 'ignore' });
+      popup.close();
+      expect(child.kill).toHaveBeenCalledWith('SIGTERM');
+    } finally {
+      if (originalDisplay === undefined) delete process.env.DISPLAY;
+      else process.env.DISPLAY = originalDisplay;
+    }
   });
 });
 

@@ -38,6 +38,31 @@ class BaseAdapter {
   getQrLoginSelectors() { return []; }
   getQrTabSelectors() { return []; }
   async isLoginSuccess() { return await this.isReady(); }
+  async prepareLogin() { return false; }
+
+  /** Detect explicit provider-side shell/code execution. */
+  async _hasProviderNativeExecution(responseText = '') {
+    if (/<forge_request>[\s\S]*"protocol"\s*:\s*"forge-workspace-v1"[\s\S]*<\/forge_request>/i.test(responseText)) {
+      return false;
+    }
+    if (!this.page || typeof this.page.evaluate !== 'function') return false;
+    return Boolean(await this.page.evaluate(() => {
+      const visible = el => {
+        const style = getComputedStyle(el);
+        return el.getClientRects().length > 0 && style.display !== 'none' &&
+          style.visibility !== 'hidden' && style.opacity !== '0';
+      };
+      const selectors = [
+        '[data-tool-name*="bash" i]', '[data-tool-name*="shell" i]',
+        '[data-tool-name*="terminal" i]', '[data-tool-name*="code_interpreter" i]',
+        '[data-tool*="bash" i]', '[data-tool*="shell" i]',
+        '[data-tool*="terminal" i]', '[data-tool*="code-interpreter" i]',
+        '[class*="command-card" i]', '[class*="terminal-result" i]',
+        '[class*="code-interpreter" i]', '[class*="tool-result" i][class*="command" i]',
+      ];
+      return selectors.some(selector => [...document.querySelectorAll(selector)].some(visible));
+    }));
+  }
 
   // ── Concrete Methods (subclasses may override) ─────────────────────────────
 

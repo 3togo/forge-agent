@@ -30,6 +30,7 @@ const {
   isPlanResponse 
 } = require('./planner');
 const { isRunningInDocker, printDockerInfo } = require('./docker');
+const { usesForgeExecutionContract } = require('./forge-execution-contract');
 
 // ─────────────────────────────────────────────
 //  Agent class
@@ -153,7 +154,10 @@ class DeepSeekAgent {
 
       const profileAddition = getProfileSystemPromptAddition(config.ACTIVE_PROFILE);
 
-      if (config.PLANNING_MODE) {
+      // Contract providers use one protocol for every turn. Provider-native
+      // planning modes would bypass Forge's workspace boundary, so plan through
+      // normal forge_request iterations instead.
+      if (config.PLANNING_MODE && !usesForgeExecutionContract(config.MODEL)) {
         logger.info('Generating execution plan...');
         const planPrompt = buildPlanPrompt(task, dirListing);
         const firstMsg   = this.conversation.buildFirstMessage(planPrompt, null, config.ACTIVE_PROFILE, profileAddition);
@@ -225,7 +229,7 @@ class DeepSeekAgent {
         try {
           rawResponse = await this.browser.waitForResponse();
         } catch (err) {
-          if (err.acpBrowserRecoverable && config.NO_INTERACTIVE) throw err;
+          if (err.retryable === false || (err.acpBrowserRecoverable && config.NO_INTERACTIVE)) throw err;
           logger.warn(`Response failed: ${err.message}`);
           progress.recordError(err.message);
 
@@ -443,8 +447,10 @@ class DeepSeekAgent {
 
           progress.recordToolResult(parsed.name, result, isError);
 
-          const feedbackMsg = this.conversation.addToolResult(parsed.name,
-            result && typeof result === 'object' ? JSON.stringify(result) : result, isError);
+          const feedbackMsg = parsed.protocol === 'forge-workspace-v1'
+            ? this.conversation.addForgeResult(parsed.operation, result, isError)
+            : this.conversation.addToolResult(parsed.name,
+              result && typeof result === 'object' ? JSON.stringify(result) : result, isError);
 
           const estimatedTokens = this.conversation.messages
             .reduce((sum, m) => sum + Math.ceil(
@@ -467,11 +473,13 @@ class DeepSeekAgent {
           _consecutiveUnrecognised = 0;
           logger.warn(`Parse error: ${parsed.message}`);
           progress.recordError(parsed.message);
-          const recovery = this.conversation.addToolResult(
-            'SYSTEM',
-            `Parse error: ${parsed.message}\n\nPlease try again with valid JSON in your tool call.`,
-            true
-          );
+          const recovery = usesForgeExecutionContract(config.MODEL)
+            ? this.conversation.addForgeResult('protocol', parsed.message, true)
+            : this.conversation.addToolResult(
+              'SYSTEM',
+              `Parse error: ${parsed.message}\n\nPlease try again with valid JSON in your tool call.`,
+              true
+            );
           await this.browser.sendMessage(recovery);
           step++;
           continue;
@@ -490,20 +498,26 @@ class DeepSeekAgent {
 
           // Safety net: if the response looks like a missed tool call
           const looksLikeToolCall = (
-            /tool_call/i.test(content) ||
+            /forge_request|tool_call/i.test(content) ||
             /"name"\s*:\s*"[\w_]+"/.test(content) ||
             /write_file|read_file|run_command|list_directory/i.test(content.slice(0, 200))
           );
 
           if (looksLikeToolCall && !(this.options.conversationalReplies && parsed.type === 'task_complete' && displayedAnswers.length)) {
             logger.warn('Response looks like a tool call but was not parsed — asking AI to retry format...');
-            const retry = this.conversation.addToolResult(
-              'SYSTEM',
-              'Your response appeared to contain a tool call but it could not be parsed. ' +
-              'Please respond with ONLY a tool call block and nothing else:\n' +
-              '<tool_call>\n{"tool": "TOOL_NAME", "args": {}}\n</tool_call>',
-              true
-            );
+            const retry = usesForgeExecutionContract(config.MODEL)
+              ? this.conversation.addForgeResult(
+                'protocol',
+                'Malformed request. Return exactly one valid <forge_request>.',
+                true
+              )
+              : this.conversation.addToolResult(
+                'SYSTEM',
+                'Your response appeared to contain a tool call but it could not be parsed. ' +
+                'Please respond with ONLY a tool call block and nothing else:\n' +
+                '<tool_call>\n{"tool": "TOOL_NAME", "args": {}}\n</tool_call>',
+                true
+              );
             await this.browser.sendMessage(retry);
             step++;
             continue;

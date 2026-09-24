@@ -8,7 +8,7 @@ const { spawnSync } = require('child_process');
 const root = path.resolve(__dirname, '..');
 
 describe('--login CLI argument', () => {
-  test('--help output contains --login and AUTHENTICATION section', () => {
+  test('--help output contains login options and AUTHENTICATION section', () => {
     const result = spawnSync(process.execPath, [path.join(root, 'src/index.js'), '--help'], {
       encoding: 'utf8',
       timeout: 10000,
@@ -16,7 +16,18 @@ describe('--login CLI argument', () => {
     });
     expect(result.status).toBe(0);
     expect(result.stdout).toContain('--login');
+    expect(result.stdout).toContain('--force-relogin');
     expect(result.stdout).toContain('AUTHENTICATION');
+  });
+
+  test('--force-relogin requires --login', () => {
+    const result = spawnSync(process.execPath, [path.join(root, 'src/index.js'), '--force-relogin'], {
+      encoding: 'utf8',
+      timeout: 10000,
+      env: { ...process.env, NODE_ENV: 'test' },
+    });
+    expect(result.status).toBe(1);
+    expect(`${result.stdout}${result.stderr}`).toContain('--force-relogin must be used with --login');
   });
 
 
