@@ -29,11 +29,14 @@ async function restoreAuth(context, file, modelUrl) {
 async function saveAuth(context, file, modelUrl) {
   const state = scopedState(await context.storageState(), modelUrl);
   if (!state.cookies.length && !state.origins.some(o => o.localStorage?.length)) return;
-  fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+  const directory = path.dirname(file);
+  fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
+  if (process.platform !== 'win32') fs.chmodSync(directory, 0o700);
   const temp = `${file}.${randomUUID()}.tmp`;
   try {
     fs.writeFileSync(temp, JSON.stringify(state), { mode: 0o600, flag: 'wx' });
     fs.renameSync(temp, file);
+    if (process.platform !== 'win32') fs.chmodSync(file, 0o600);
   } finally { try { fs.unlinkSync(temp); } catch (err) { if (err.code !== 'ENOENT') throw err; } }
 }
 function isAuthValid(file) {

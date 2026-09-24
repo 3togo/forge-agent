@@ -64,3 +64,70 @@ test('rollback removes a credential created when none existed before relogin', (
     fs.rmSync(directory, { recursive: true, force: true });
   }
 });
+
+test('reports only safe credential metadata and repairs file permissions', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-credential-store-'));
+  const file = path.join(directory, 'nested', 'yuanbao.json');
+  try {
+    fs.mkdirSync(path.dirname(file));
+    fs.writeFileSync(file, '{"account":"secret"}', { mode: 0o644 });
+    if (process.platform !== 'win32') {
+      fs.chmodSync(path.dirname(file), 0o755);
+      fs.chmodSync(file, 0o644);
+    }
+    auth.isAuthValid.mockReturnValue(true);
+    const store = CredentialStore.forModel('yuanbao', { file });
+
+    expect(store.info()).toEqual(expect.objectContaining({
+      file, exists: true, valid: true, backupExists: false,
+    }));
+    expect(store.info()).not.toHaveProperty('contents');
+    if (process.platform !== 'win32') expect(store.info().protected).toBe(false);
+
+    const secured = store.secure();
+    if (process.platform !== 'win32') {
+      expect(secured.mode).toBe(0o600);
+      expect(secured.directoryMode).toBe(0o700);
+      expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
+    }
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('clears both the current credential and rollback backup', () => {
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-credential-store-'));
+  const file = path.join(directory, 'yuanbao.json');
+  try {
+    fs.writeFileSync(file, '{}');
+    fs.writeFileSync(`${file}.backup`, '{}');
+    const store = CredentialStore.forModel('yuanbao', { file });
+
+    expect(store.clear()).toBe(true);
+    expect(fs.existsSync(file)).toBe(false);
+    expect(fs.existsSync(`${file}.backup`)).toBe(false);
+    expect(store.clear()).toBe(false);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test('includes rollback backup permissions in the protection status', () => {
+  if (process.platform === 'win32') return;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), 'forge-credential-store-'));
+  const file = path.join(directory, 'yuanbao.json');
+  try {
+    fs.chmodSync(directory, 0o700);
+    fs.writeFileSync(file, '{}', { mode: 0o600 });
+    fs.writeFileSync(`${file}.backup`, '{}', { mode: 0o644 });
+    fs.chmodSync(`${file}.backup`, 0o644);
+    const store = CredentialStore.forModel('yuanbao', { file });
+
+    expect(store.info()).toEqual(expect.objectContaining({
+      protected: false, mode: 0o600, backupMode: 0o644, directoryMode: 0o700,
+    }));
+    expect(store.secure().protected).toBe(true);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+});

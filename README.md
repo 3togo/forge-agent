@@ -141,6 +141,13 @@ Provider-native agents, Skills, and Deep Research are intentionally not exposed
 because those features run outside Forge's local workspace and permission
 boundary.
 
+The **Credentials & Sessions** menu reports whether saved browser sessions are
+restricted to the current operating-system user, can repair owner-only file and
+directory permissions, and opens the credential folder without revealing any
+cookie or token values. Each provider menu also offers a confirmed sign-out that
+removes both its saved session and rollback backup. Forge never displays,
+copies, or writes raw credentials to tray notifications or preferences.
+
 The forced login uses a disposable fresh profile and first writes the previous
 credential to `yuanbao.json.backup` with owner-only permissions. A failed or
 timed-out login automatically restores that backup; a successful login keeps the

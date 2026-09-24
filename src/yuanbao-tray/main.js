@@ -10,6 +10,7 @@ const { ForgeTrayPreferences, TRAY_MODELS } = require('../forge-tray-preferences
 const { ENGINES, YuanbaoPreferences } = require('../yuanbao-preferences');
 const { MODES, ProviderWebPreferences } = require('../provider-web-preferences');
 const { LOGIN_STATES, probeProviderLogin } = require('../provider-login-status');
+const { CredentialStore } = require('../credential-store');
 
 const APP_NAME = 'Forge Agents';
 const PROJECT_ROOT = path.resolve(__dirname, '..', '..');
@@ -62,15 +63,68 @@ function notify(title, body) {
 function activeModel() { return preferences.load().activeModel; }
 function loginLog(model) { return path.join(LOG_DIRECTORY, `${model}-tray-login.log`); }
 
+function credentialInfo(model) {
+  try { return CredentialStore.forModel(model).info(); }
+  catch { return null; }
+}
+
+function protectionLabel(info) {
+  if (!info?.exists && !info?.backupExists) return 'No saved session';
+  if (info.protected) return info.exists ? 'Storage: owner-only' : 'Rollback backup: owner-only';
+  const fileMode = info.mode?.toString(8) || 'unknown';
+  const backupMode = info.backupMode?.toString(8) || 'none';
+  const directoryMode = info.directoryMode?.toString(8) || 'unknown';
+  return `Storage warning: file ${fileMode}, backup ${backupMode}, folder ${directoryMode}`;
+}
+
+async function confirmSignOut(model) {
+  const provider = getModelDisplayName(model);
+  const store = CredentialStore.forModel(model);
+  const info = store.info();
+  if (!info.exists && !info.backupExists) {
+    notify(APP_NAME, `No saved ${provider} session was found.`);
+    return;
+  }
+  const result = await dialog.showMessageBox({
+    type: 'warning', title: `Remove ${provider} session?`,
+    message: `Sign out ${provider} from Forge Agent?`,
+    detail: 'This removes the saved browser session and its backup from this computer. It does not delete the provider account or revoke other devices.',
+    buttons: ['Cancel', 'Remove saved session'], defaultId: 0, cancelId: 0,
+  });
+  if (result.response !== 1) return;
+  try {
+    store.clear();
+    statuses[model] = {
+      model, state: LOGIN_STATES.LOGIN_REQUIRED, detail: `No saved ${provider} login`,
+    };
+    updateTray();
+    notify(APP_NAME, `${provider} saved session removed.`);
+  } catch (error) {
+    notify(`${provider} sign out failed`, String(error.message || error));
+  }
+}
+
+function secureCredentialStorage({ quiet = false } = {}) {
+  try {
+    for (const model of TRAY_MODELS) CredentialStore.forModel(model).secure();
+    updateTray();
+    if (!quiet) notify(APP_NAME, 'Credential files are restricted to your operating-system user.');
+  } catch (error) {
+    notify('Could not protect credential storage', String(error.message || error));
+  }
+}
+
 function providerMenu(model, selectedModel) {
   const provider = getModelDisplayName(model);
   const status = statuses[model];
+  const storedCredential = credentialInfo(model);
   const providerItems = [
       {
         label: 'Use as active agent', type: 'radio', checked: selectedModel === model,
         click: () => { preferences.setActiveModel(model); updateTray(); },
       },
       { label: status.detail, enabled: false },
+      { label: protectionLabel(storedCredential), enabled: false },
   ];
   if (model !== 'yuanbao') {
     const selectedMode = providerWebPreferences.load().modes[model];
@@ -101,6 +155,15 @@ function providerMenu(model, selectedModel) {
       {
         label: 'Show login log', enabled: fs.existsSync(loginLog(model)),
         click: () => shell.showItemInFolder(loginLog(model)),
+      },
+      {
+        label: 'Open credential folder', enabled: Boolean(storedCredential?.exists),
+        click: () => shell.showItemInFolder(storedCredential.file),
+      },
+      {
+        label: 'Sign out and remove saved session…',
+        enabled: Boolean(storedCredential?.exists || storedCredential?.backupExists),
+        click: () => confirmSignOut(model),
       },
   );
   return {
@@ -135,6 +198,25 @@ function updateTray() {
       })),
     },
     { type: 'separator' },
+    {
+      label: 'Credentials & Sessions',
+      submenu: [
+        ...TRAY_MODELS.map(model => ({
+          label: `${getModelDisplayName(model)}: ${protectionLabel(credentialInfo(model))}`,
+          enabled: false,
+        })),
+        { type: 'separator' },
+        { label: 'Repair owner-only permissions', click: secureCredentialStorage },
+        {
+          label: 'Open credential folder',
+          click: () => {
+            const location = CredentialStore.forModel(activeModel()).file;
+            fs.mkdirSync(path.dirname(location), { recursive: true, mode: 0o700 });
+            shell.openPath(path.dirname(location));
+          },
+        },
+      ],
+    },
     { label: 'Refresh all login statuses', enabled: !refreshPromise, click: () => refreshStatus() },
     { label: 'Quit', role: 'quit' },
   ]));
@@ -215,6 +297,7 @@ if (!app.requestSingleInstanceLock()) {
     if (!preferences.exists()) preferences.save(preferences.load());
     if (!yuanbaoPreferences.exists()) yuanbaoPreferences.save(yuanbaoPreferences.load());
     if (!providerWebPreferences.exists()) providerWebPreferences.save(providerWebPreferences.load());
+    secureCredentialStorage({ quiet: true });
     tray = new Tray(trayIcon(LOGIN_STATES.CHECKING));
     updateTray();
     refreshStatus();

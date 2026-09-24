@@ -16,6 +16,7 @@ describe('shared login across isolated profiles', () => {
     expect(next.addCookies).toHaveBeenCalledWith([cookie]);
     expect(next.addInitScript.mock.calls[0][1]).toEqual(state.origins);
     expect(fs.statSync(file).mode & 0o777).toBe(0o600);
+    if (process.platform !== 'win32') expect(fs.statSync(path.dirname(file)).mode & 0o777).toBe(0o700);
     expect(fs.readdirSync(path.dirname(file))).toEqual(['doubao.json']);
   });
   test('does not share unrelated domains or expired cookies', async () => {
